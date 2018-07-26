@@ -12,16 +12,13 @@
 #include "itkMersenneTwisterRandomVariateGenerator.h"
 
 #include "itkAlphaSMDMetricInternal2.h"
-#include "itkAlphaSMDAffineTransform.h"
+#include "../transforms/itkAlphaSMDAffineTransform.h"
 
 namespace itk {
 	/**
 	* Metric which computes the Alpha-SMD Fuzzy Set Distance between a pair of Fixed and Moving images.
 	* Since it does not satisfy the assumptions of the ImageToImageMetric-base classes, the measure
 	* is implemented as an ObjectToObjectMetric instead.
-	*
-	* TODO: Remove this convention, we do not want A/B notation here.
-	* The convention used here is that image A is the Fixed/Reference image and B is the Moving/Floating image.
 	*/
 	template <typename ImageType, unsigned int Dim, typename TInternalComputationValueType = double, typename SymmetricTransformType = itk::AlphaSMDAffineTransform<double, Dim> >
 	class AlphaSMDObjectToObjectMetric2v4 :

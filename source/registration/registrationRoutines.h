@@ -6,7 +6,7 @@
 
 #include <math.h>
 
-#include "common/itkImageProcessingTools.h"
+#include "../common/itkImageProcessingTools.h"
 
 #include "itkRealTimeClock.h"
 #include "itkImageMaskSpatialObject.h"
@@ -21,12 +21,7 @@
 #include "itkCorrelationImageToImageMetricv4.h"
 #include "itkMattesMutualInformationImageToImageMetricv4.h"
 
-#define DO_SECOND_METRIC
-#ifdef DO_SECOND_METRIC
-#include "metric/itkAlphaSMDMetric2.h"
-#else
-#include "metric/itkAlphaSMDMetric.h"
-#endif
+#include "../metric/itkAlphaSMDMetric2.h"
 
 struct RegistrationParam {
 	unsigned int iterations;
@@ -268,11 +263,7 @@ itk::Transform<double, 2U, 2U>::Pointer apply_registration_alpha_smd_internal_2d
 	typedef itk::IPT<double, Dim> IPT;
 	typedef itk::AlphaSMDAffineTransform<double, Dim> SymmetricTransformType;
 
-#ifdef DO_SECOND_METRIC
 	typedef itk::AlphaSMDObjectToObjectMetric2v4<typename IPT::ImageType, Dim, double, SymmetricTransformType > MetricType;
-#else
-	typedef itk::AlphaSMDObjectToObjectMetricv4<typename IPT::ImageType, Dim, double, SymmetricTransformType > MetricType;
-#endif
 	typedef MetricType::Pointer MetricPointer;
 
 	MetricPointer metric = MetricType::New();
@@ -447,11 +438,7 @@ itk::Transform<double, 3U, 3U>::Pointer apply_registration_alpha_smd_internal_3d
 	typedef itk::IPT<double, Dim> IPT;
 	typedef itk::AlphaSMDAffineTransform<double, Dim> SymmetricTransformType;
 
-#ifdef DO_SECOND_METRIC
 	typedef itk::AlphaSMDObjectToObjectMetric2v4<typename IPT::ImageType, Dim, double, SymmetricTransformType > MetricType;
-#else
-	typedef itk::AlphaSMDObjectToObjectMetricv4<typename IPT::ImageType, Dim, double, SymmetricTransformType > MetricType;
-#endif
 	typedef MetricType::Pointer MetricPointer;
 
 	MetricPointer metric = MetricType::New();
@@ -626,11 +613,7 @@ itk::Transform<double, 2U, 2U>::Pointer apply_registration_alpha_smd_internal_2d
 	typedef itk::IPT<double, Dim> IPT;
 	typedef itk::AlphaSMDRigid2DTransform<double> SymmetricTransformType;
 
-#ifdef DO_SECOND_METRIC
 	typedef itk::AlphaSMDObjectToObjectMetric2v4<typename IPT::ImageType, Dim, double, SymmetricTransformType > MetricType;
-#else
-	typedef itk::AlphaSMDObjectToObjectMetricv4<typename IPT::ImageType, Dim, double, SymmetricTransformType > MetricType;
-#endif
 	typedef MetricType::Pointer MetricPointer;
 
 	MetricPointer metric = MetricType::New();

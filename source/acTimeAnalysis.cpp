@@ -7,7 +7,7 @@
 #include "common/itkImageProcessingTools.h"
 #include "itkTextOutput.h"
 
-#include "metric/itkAlphaSMDMetric.h"
+#include "metric/itkAlphaSMDMetric2.h"
 #include "itkRealTimeClock.h"
 #include "itkNumericTraits.h"
 
@@ -221,7 +221,7 @@ static void DoTimeAnalysis(TimeAnalysisProgramParam &param)
     {
     	typedef itk::AlphaSMDAffineTransform<double, Dim> SymmetricTransformType;
 
-	    typedef itk::AlphaSMDObjectToObjectMetricv4<typename IPT::ImageType, Dim, double, SymmetricTransformType > MetricType;
+	    typedef itk::AlphaSMDObjectToObjectMetric2v4<typename IPT::ImageType, Dim, double, SymmetricTransformType > MetricType;
 	    typedef typename MetricType::Pointer MetricPointer;
 
 	    MetricPointer metric = MetricType::New();

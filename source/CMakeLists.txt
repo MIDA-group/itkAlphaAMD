@@ -2,7 +2,6 @@ cmake_minimum_required(VERSION 3.5)
 project(ACMetric)
 
 if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "MSVC")
-  #set(ITK_DIR "../../itk-sandbox/ITK-build/")
   set(ITK_DIR "c:/dev/itk-sandbox/ITK-build/")
 endif()
 
@@ -12,10 +11,10 @@ find_package(ITK REQUIRED)
 include(${ITK_USE_FILE})
 
 SET(HEADERS
-  metric/itkAlphaSMDAffineTransform.h
-  metric/itkAlphaSMDMetric.h
-  metric/itkAlphaSMDMetricInternal.h
-  registrationRoutines.h
+  transforms/itkAlphaSMDAffineTransform.h
+  metric/itkAlphaSMDMetric2.h
+  metric/itkAlphaSMDMetricInternal2.h
+  registration/registrationRoutines.h
 )
 
 add_executable(ACRandomTransforms acRandomTransforms.cpp ${HEADERS})

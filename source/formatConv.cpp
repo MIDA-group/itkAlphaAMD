@@ -9,7 +9,6 @@
 
 #include "Log.h"
 
-//#include "itklab/itklab.h"
 #include "common/itkImageProcessingTools.h"
 
 template <unsigned int Dim>

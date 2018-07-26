@@ -4,7 +4,7 @@
 #include <string>
 
 #include "common/itkImageProcessingTools.h"
-#include "registrationRoutines.h"
+#include "registration/registrationRoutines.h"
 #include "itkTextOutput.h"
 
 struct RegistrationProgramParam
