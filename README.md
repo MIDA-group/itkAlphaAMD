@@ -6,10 +6,11 @@ Author: Johan Öfverstedt
 Requirements/Dependencies:
 
 ITK 4.x (tested with 4.9).
+CMake
 
 Tested on Windows 10, MacOSX and Ubuntu 16.04 LTS.
 
-To build the framework, go to the directory above the repository:
+To build the framework (on Linux), go to the directory directly above the repository:
 
 $ mkdir itkAlphaAMD-build/
 $ cd itkAlphaAMD-build/
