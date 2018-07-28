@@ -23,7 +23,7 @@ $ make
 
 Now there will be a number of command line applications in the folder:
 
-ACRegister - Tegisters pairs of images to a common space.
+ACRegister - Registers pairs of images to a common space.
 
 ACTransform - Warps images according to a given transformation, e.g. found by ACRegister.
 
