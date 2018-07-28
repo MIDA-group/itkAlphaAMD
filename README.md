@@ -3,7 +3,7 @@ itkAlphaAMD is a registration framework (and distance measure) building on Insig
 
 Author: Johan Öfverstedt
 
-======
+- - -
 
 Requirements/Dependencies:
 
@@ -13,7 +13,7 @@ CMake
 
 Tested on Windows 10, MacOSX and Ubuntu 16.04 LTS.
 
-======
+- - -
 
 To build the framework (on Linux), go to the directory directly above the repository:
 
