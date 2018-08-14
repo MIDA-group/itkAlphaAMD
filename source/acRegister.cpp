@@ -173,7 +173,7 @@ static void DoRegister(RegistrationProgramParam &param)
 	 	initTransform = IPT::LoadTransformFile(param.initialTransformPath.c_str());
 		if(initTransform)
 		{
-			std::cout << "Initial transform: " << (*initTransform) << std::endl;
+			std::cout << "Initial transform: " << (initTransform) << std::endl;
 		} else {
 			std::cout << "Error reading transform file." << std::endl;
 		}
@@ -488,7 +488,7 @@ int main(int argc, char **argv)
 
 	if(param.multiscaleSamplingFactors.size() != param.multiscaleSmoothingSigmas.size())
 	{
-		std::cerr << "Error: Multiscale sampling factor (" + param.multiscaleSamplingFactors.size() << ") and smoothing sigmas (" << param.multiscaleSmoothingSigmas.size() << ")  count mismatch." << std::endl;
+	  std::cerr << "Error: Multiscale sampling factor (" << param.multiscaleSamplingFactors.size() << ") and smoothing sigmas (" << param.multiscaleSmoothingSigmas.size() << ")  count mismatch." << std::endl;
 		return -1;
 	}
 

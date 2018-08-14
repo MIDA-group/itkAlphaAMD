@@ -120,7 +120,7 @@ int main(int argc, char **argv)
 	itk::IPT<double, 2U>::SaveTransformFile("test.txt", baseTransform);
 	BaseTransformPointer loadedTransform = itk::IPT<double, 2U>::LoadTransformFile("test.txt");
 
-	std::cout << (*loadedTransform) << std::endl;
+	std::cout << (loadedTransform) << std::endl;
 
 	return 0;
 }
