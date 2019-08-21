@@ -102,7 +102,8 @@ typename itk::Image<ImagePixelType, Dim>::Pointer ConvertImageToIntegerFormat(ty
 
     RescaleFilterPointer rescaleFilter = RescaleFilter::New();
     rescaleFilter->SetInput(image);
-    rescaleFilter->SetShift((halfInt / span) + minVal);
+    rescaleFilter->SetShift(0);
+    //rescaleFilter->SetShift((halfInt / span) + minVal);
     rescaleFilter->SetScale(span);
     rescaleFilter->Update();
 
@@ -176,6 +177,7 @@ inline void PrintStatistics(
     std::cout << "Origin:   " << image->GetLargestPossibleRegion().GetIndex() << std::endl;
     std::cout << "Size:     " << image->GetLargestPossibleRegion().GetSize() << std::endl;
     std::cout << "Spacing:  " << image->GetSpacing() << std::endl;
+    std::cout << "Direction:" << image->GetDirection() << std::endl;
     std::cout << "Mean:     " << statisticsImageFilter->GetMean() << std::endl;
     std::cout << "Std. Dev: " << statisticsImageFilter->GetSigma() << std::endl;
     std::cout << "Min:      " << statisticsImageFilter->GetMinimum() << std::endl;
@@ -918,7 +920,7 @@ class IPT
     }
 
     static void SaveImageU8(
-        const char *path,
+        std::string path,
         ImagePointer image)
     {
 
@@ -929,13 +931,13 @@ class IPT
 
         WriterPointer writer = WriterType::New();
 
-        writer->SetFileName(path);
+        writer->SetFileName(path.c_str());
         writer->SetInput(imageu8);
         writer->Update();
     }
 
     static void SaveImageU16(
-        const char *path,
+        std::string path,
         ImagePointer image)
     {
 
@@ -946,13 +948,13 @@ class IPT
 
         WriterPointer writer = WriterType::New();
 
-        writer->SetFileName(path);
+        writer->SetFileName(path.c_str());
         writer->SetInput(imageu16);
         writer->Update();
     }
 
     static void SaveImage(
-        const char* path,
+        std::string path,
         ImagePointer image,
         bool format16U)
     {
@@ -1149,7 +1151,7 @@ class IPT
     }
 
     static void SaveLabelImage(
-        const char *path,
+        std::string path,
         LabelImagePointer image)
     {
         typedef itk::ImageFileWriter<LabelImageType> WriterType;
@@ -1157,7 +1159,7 @@ class IPT
 
         WriterPointer writer = WriterType::New();
 
-        writer->SetFileName(path);
+        writer->SetFileName(path.c_str());
         writer->SetInput(image);
         writer->Update();
     }
@@ -1241,11 +1243,12 @@ class IPT
         ValueType minVal = (ValueType)itk::NumericTraits<ImagePixelType>::min();
         ValueType maxVal = (ValueType)itk::NumericTraits<ImagePixelType>::max();
         ValueType span = (maxVal - minVal);
+//std::cout << "minVal: " << minVal << ", maxVal: " << maxVal << ", span: " << span << std::endl;
         ValueType halfInt = (itk::NumericTraits<ValueType>::One / 2);
-
+//(halfInt / span) + minVal
         RescaleFilterPointer rescaleFilter = RescaleFilter::New();
         rescaleFilter->SetInput(image);
-        rescaleFilter->SetShift((halfInt / span) + minVal);
+        rescaleFilter->SetShift(0);
         rescaleFilter->SetScale(span);
         rescaleFilter->Update();
 
@@ -1275,7 +1278,18 @@ class IPT
         ValueType minVal = (ValueType)itk::NumericTraits<ImagePixelType>::min();
         ValueType maxVal = (ValueType)itk::NumericTraits<ImagePixelType>::max();
         ValueType span = (maxVal - minVal);
+	// Something wrong HERE!
+        RescaleFilterPointer rescaleFilter = RescaleFilter::New();
+        rescaleFilter->SetInput(castFilter->GetOutput());
+        rescaleFilter->SetShift(0);
+        rescaleFilter->SetScale(itk::NumericTraits<ValueType>::One / span);
+        rescaleFilter->Update();
 
+        return rescaleFilter->GetOutput();
+/*        ValueType minVal = (ValueType)itk::NumericTraits<ImagePixelType>::min();
+        ValueType maxVal = (ValueType)itk::NumericTraits<ImagePixelType>::max();
+        ValueType span = (maxVal - minVal);
+	// Something wrong HERE!
         RescaleFilterPointer rescaleFilter = RescaleFilter::New();
         rescaleFilter->SetInput(castFilter->GetOutput());
         rescaleFilter->SetShift(-minVal);
@@ -1283,6 +1297,7 @@ class IPT
         rescaleFilter->Update();
 
         return rescaleFilter->GetOutput();
+*/
     }
 
     //
@@ -2434,6 +2449,7 @@ class IPT
         // Create and setup a Gaussian filter
         typename filterType::Pointer gaussianFilter = filterType::New();
         gaussianFilter->SetInput(image);
+	gaussianFilter->SetUseImageSpacingOn();
         gaussianFilter->SetMaximumKernelWidth(128);
         gaussianFilter->SetVariance(sigma * sigma);
         gaussianFilter->Update();

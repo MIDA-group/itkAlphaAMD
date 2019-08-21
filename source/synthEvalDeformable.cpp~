@@ -1,0 +1,246 @@
+
+#include "./common/itkImageProcessingTools.h"
+
+#include "itkLabelOverlapMeasuresImageFilter.h"
+#include "itkMersenneTwisterRandomVariateGenerator.h"
+#include "bsplineFunctions.h"
+#include "itkNearestNeighborInterpolateImageFunction.h"
+//#include "itkBSplineInterpolationWeightFunction.h"
+#include "itkBSplineInterpolateImageFunction.h"
+
+struct PerformanceMetrics {
+    double accuracy;
+    double absDiff;
+};
+
+template <unsigned int ImageDimension>
+class SynthEvalDeformable
+{
+    public:
+
+    typedef itk::IPT<double, ImageDimension> IPT;
+
+    typedef itk::Image<double, ImageDimension> ImageType;
+    typedef typename ImageType::Pointer ImagePointer;
+    typedef itk::Image<unsigned short, ImageDimension> LabelImageType;
+    typedef typename LabelImageType::Pointer LabelImagePointer;
+    typedef itk::Image<bool, ImageDimension> MaskType;
+    typedef typename MaskType::Pointer MaskPointer;
+
+    typedef BSplines<ImageDimension> BSplineFunc;
+
+
+    template <typename TransformType>
+    void RandomizeDeformableTransform(typename TransformType::Pointer transform, double magnitude, unsigned int seed)
+    {
+        auto N = transform->GetNumberOfParameters();
+        typedef itk::Statistics::MersenneTwisterRandomVariateGenerator GeneratorType;
+        typename GeneratorType::Pointer RNG = GeneratorType::New();
+        RNG->SetSeed(seed);
+
+        typename TransformType::DerivativeType delta(N);
+
+        for (unsigned int i = 0; i < N; ++i)
+        {
+            double x = RNG->GetVariateWithClosedRange();
+            double y = (-1.0 + 2.0 * x) * magnitude;
+            delta[i] = y;
+        }
+
+        transform->UpdateTransformParameters(delta, 1.0);
+    }
+
+    template <typename TImageType, typename TTransformType>
+    typename TImageType::Pointer ApplyTransform(
+        typename TImageType::Pointer refImage,
+        typename TImageType::Pointer floImage,
+        typename TTransformType::Pointer transform,
+        int interpolator = 1,
+        typename TImageType::PixelType defaultValue = 0)
+    {
+        typedef itk::ResampleImageFilter<
+            TImageType,
+            TImageType>
+            ResampleFilterType;
+
+        typename ResampleFilterType::Pointer resample = ResampleFilterType::New();
+
+        resample->SetTransform(transform);
+        resample->SetInput(floImage);
+
+        // Linear interpolator (1) is the default
+        if (interpolator == 0)
+        {
+            auto interp = itk::NearestNeighborInterpolateImageFunction<TImageType, double>::New();
+            resample->SetInterpolator(interp);
+        }
+        else if (interpolator == 2)
+        {
+            auto interp = itk::BSplineInterpolateImageFunction<TImageType, double>::New();//itk::BSplineInterpolationWeightFunction<double, ImageDimension, 3U>::New();
+            resample->SetInterpolator(interp);
+        }
+
+        resample->SetSize(refImage->GetLargestPossibleRegion().GetSize());
+        resample->SetOutputOrigin(refImage->GetOrigin());
+        resample->SetOutputSpacing(refImage->GetSpacing());
+        resample->SetOutputDirection(refImage->GetDirection());
+        resample->SetDefaultPixelValue(defaultValue);
+
+        resample->UpdateLargestPossibleRegion();
+
+        return resample->GetOutput();
+    }
+
+    template <typename TImageType>
+    double LabelAccuracy(typename TImageType::Pointer image1, typename TImageType::Pointer image2) {
+        typedef itk::LabelOverlapMeasuresImageFilter<TImageType> FilterType;
+        typedef typename FilterType::Pointer FilterPointer;
+
+        FilterPointer filter = FilterType::New();
+
+        filter->SetSourceImage(image1);
+        filter->SetTargetImage(image2);
+
+        filter->Update();
+
+        return filter->GetTotalOverlap();
+    }
+
+    void Evaluate(
+        ImagePointer refImage,
+        ImagePointer refImageMask,
+        LabelImagePointer refImageLabel,
+        unsigned int controlPointCount,
+        double transformMagnitude,
+        const std::vector<unsigned int>& seeds,
+        unsigned int startIndex,
+        unsigned int endIndex,
+        std::vector<PerformanceMetrics>& beforePerf,
+        std::vector<PerformanceMetrics>& afterPerf)
+    {
+
+        BSplineFunc bsf;
+
+        typedef typename BSplineFunc::TransformType TransformType;
+        typedef typename BSplineFunc::TransformType::Pointer TransformPointer;
+
+	double noiseSigma = 0.1;
+	
+        for(unsigned int i = startIndex; i < endIndex; ++i) {
+            TransformPointer randTransform = bsf.CreateBSplineTransform(refImage, controlPointCount);
+            RandomizeDeformableTransform<TransformType>(randTransform, transformMagnitude, seeds[i]);
+        //typename TImageType::Pointer refImage,
+        //typename TImageType::Pointer floImage,
+        //typename TTransformType::Pointer transform,
+        //int interpolator = 1,
+        //typename TImageType::PixelType defaultValue = 0
+            ImagePointer floImage = ApplyTransform<ImageType, TransformType>(refImage, refImage, randTransform, 1, 0.0);
+            ImagePointer floImageMask = ApplyTransform<ImageType, TransformType>(refImageMask, refImageMask, randTransform, 0, 0.0);
+            LabelImagePointer floImageLabel = ApplyTransform<LabelImageType, TransformType>(refImageLabel, refImageLabel, randTransform, 0, 0);
+
+	    ImagePointer refImageNoisy = IPT::AdditiveNoise(refImage, noiseSigma, 0.0, seeds[i]*19+13, true);
+	    ImagePointer floImageNoisy = IPT::AdditiveNoise(floImage, noiseSigma, 0.0, seeds[i]*17+11, true);
+/*
+struct BSplineRegParam
+{
+    double learningRate1;
+    double learningRate2;
+    double lambdaFactor;
+    int iterations;
+    double samplingFraction;
+    std::vector<int> controlPoints;
+};*/
+            BSplineRegParam params;
+            params.learningRate1 = 5.0;
+            params.learningRate2 = 1.0;
+            params.lambdaFactor = 0.05;
+            params.iterations = 1000;
+            params.samplingFraction = 0.05;
+            //params.controlPoints.push_back(7);
+            params.controlPoints.push_back(14);
+            params.controlPoints.push_back(21);
+
+            TransformPointer forwardTransform = bsf.CreateBSplineTransform(refImage, 7);
+            TransformPointer inverseTransform = bsf.CreateBSplineTransform(floImage, 7);
+
+            bsf.register_func(refImageNoisy, floImageNoisy, forwardTransform, inverseTransform, params, refImageMask, floImageMask);
+
+            ImagePointer registeredImage = ApplyTransform<ImageType, TransformType>(refImage, floImage, forwardTransform, 1, 0.0);
+            LabelImagePointer registeredLabel = ApplyTransform<LabelImageType, TransformType>(refImageLabel, floImageLabel, forwardTransform, 0, 0);
+
+            PerformanceMetrics beforePM;
+            PerformanceMetrics afterPM;
+
+            typename ImageType::Pointer beforeDiff = IPT::DifferenceImage(refImage, floImage);
+
+            typename IPT::ImageStatisticsData beforeStats = IPT::ImageStatistics(beforeDiff);
+            beforePM.absDiff = beforeStats.mean;
+
+            beforePM.accuracy = LabelAccuracy<LabelImageType>(refImageLabel, floImageLabel);
+
+            typename ImageType::Pointer afterDiff = IPT::DifferenceImage(refImage, registeredImage);
+
+            typename IPT::ImageStatisticsData afterStats = IPT::ImageStatistics(afterDiff);
+            afterPM.absDiff = afterStats.mean;
+
+            afterPM.accuracy = LabelAccuracy<LabelImageType>(refImageLabel, registeredLabel);
+
+            beforePerf.push_back(beforePM);
+            afterPerf.push_back(afterPM);
+
+            std::cout << "Before: (" << beforePM.accuracy << ", " << beforePM.absDiff << ")." << std::endl;
+            std::cout << "After: (" << afterPM.accuracy << ", " << afterPM.absDiff << ")." << std::endl;
+
+            if(i == startIndex) {
+                IPT::SaveImageU8("./synth_noisy_ref.png", refImageNoisy);
+                IPT::SaveImageU8("./synth_deformed.png", floImageNoisy);
+                IPT::SaveImageU8("./synth_registered.png", registeredImage);
+                IPT::SaveLabelImage("./synth_label_deformed.png", floImageLabel);
+                IPT::SaveLabelImage("./synth_label_registered.png", registeredLabel);
+            }
+        }
+    }
+
+    int MainFunc(int argc, char** argv) {
+        std::string refImagePath = argv[2];
+        std::string refImageMaskPath = argv[3];
+        std::string refImageLabelPath = argv[4];
+
+        unsigned int seed = atoi(argv[5]);
+        unsigned int count = atoi(argv[6]);
+
+        std::vector<unsigned int> seeds;
+        for(unsigned int i = 0; i < count; ++i) {
+            seed = seed * 17 + 13;
+            seeds.push_back(seed);
+        }
+
+        ImagePointer refImage = IPT::LoadImage(refImagePath.c_str());
+        ImagePointer refImageMask = IPT::LoadImage(refImageMaskPath.c_str());
+        LabelImagePointer refImageLabel = IPT::LoadLabelImage(refImageLabelPath.c_str());
+
+        BSplineFunc bspline_func;
+        /*
+    void Evaluate(
+        ImagePointer refImage,
+        ImagePointer refImageMask,
+        LabelImagePointer refImageLabel,
+        unsigned int controlPointCount,
+        double transformMagnitude,
+        const std::vector<unsigned int>& seeds,
+        unsigned int startIndex,
+        unsigned int endIndex,
+        std::vector<PerformanceMetrics>& beforePerf,
+        std::vector<PerformanceMetrics>& afterPerf)*/
+        std::vector<PerformanceMetrics> beforePerf;
+        std::vector<PerformanceMetrics> afterPerf;
+
+        //for(unsigned int i = 0; i < count; ++i) {
+        Evaluate(refImage, refImageMask, refImageLabel, 14, 5.0, seeds, 0, count, beforePerf, afterPerf);
+        //}
+        //bspline_func.
+
+        return 0;
+    }
+};
+

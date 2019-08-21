@@ -9,8 +9,8 @@ masks_path = "/home/johof680/work/LPBA40_for_ANTs/masks/"
 atlas_path = "/home/johof680/work/LPBA40_for_ANTs/templates/MI/"
 
 #in_path = "/home/johof680/work/VironovaRegistrationImages/1Original/"
-out_path = "/home/johof680/work/LPBA40_for_ANTs/eval/ALPHA_SMD/"
-exe_path = "/home/johof680/work/itkAlphaCut-4j/build6/ACTransform"
+out_path = "/home/johof680/work/LPBA40_for_ANTs/eval/ALPHA_SMD_4/"
+exe_path = "/home/johof680/work/itkAlphaAMD-build2/ACTransform"
 
 # NOTE: CHANGE THE FOLLOWING TO RUN THIS FOR EACH OF THE 2 PARTS OF THE CROSS VALIDATION
 if(len(sys.argv) < 2):

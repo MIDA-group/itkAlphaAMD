@@ -20,9 +20,9 @@ atlas_path = base_path + "templates/MI/"
 ENABLE_PYRAMIDS = False
 
 if ENABLE_PYRAMIDS:
-    out_path = base_path + "eval/ALPHA_SMD_PYRAMIDS_2/"
+    out_path = base_path + "eval/ALPHA_SMD_PYRAMIDS_4/"
 else:
-    out_path = base_path + "eval/ALPHA_SMD_2/"
+    out_path = base_path + "eval/ALPHA_SMD_4/"
 
 cnt = 20
 
