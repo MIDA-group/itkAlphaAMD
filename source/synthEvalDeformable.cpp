@@ -4,11 +4,15 @@
 #include "./common/itkImageProcessingTools.h"
 
 #include "itkLabelOverlapMeasuresImageFilter.h"
+#include "itkHausdorffDistanceImageFilter.h"
 #include "itkMersenneTwisterRandomVariateGenerator.h"
 #include "bsplineFunctions.h"
 #include "itkNearestNeighborInterpolateImageFunction.h"
 //#include "itkBSplineInterpolationWeightFunction.h"
 #include "itkBSplineInterpolateImageFunction.h"
+
+#include "itkTimeProbesCollectorBase.h"
+#include "itkMemoryProbesCollectorBase.h"
 
 struct EvaluationConfig {
     unsigned int count;
@@ -46,6 +50,7 @@ EvaluationConfig readEvaluationConfig(std::string path) {
 
 struct PerformanceMetrics {
     double accuracy;
+    double hausdorff;
     double absDiff;
 };
 
@@ -57,18 +62,79 @@ struct EvalThread {
     unsigned int endIndex;
 };
 
-void printMetrics(PerformanceMetrics m) {
-    std::cout << "(" << m.accuracy << ", " << m.absDiff << ").";
+void printMetrics(PerformanceMetrics m, std::string name, bool linebreak=true) {
+    std::cout << name << "(acc: " << m.accuracy << ", hausdorff: " << m.hausdorff << ", absdiff: " << m.absDiff << ").";
+    if(linebreak)
+        std::cout << std::endl;
 }
 
 PerformanceMetrics meanMetrics(std::vector<PerformanceMetrics>& m) {
     PerformanceMetrics acc;
     acc.accuracy = 0.0;
+    acc.hausdorff = 0.0;
     acc.absDiff = 0.0;
 
     for(size_t i = 0; i < m.size(); ++i) {
         acc.accuracy += m[i].accuracy / m.size();
+        acc.hausdorff += m[i].hausdorff / m.size();
         acc.absDiff += m[i].absDiff / m.size();
+    }
+
+    return acc;
+}
+
+PerformanceMetrics sdMetrics(std::vector<PerformanceMetrics>& m) {
+    PerformanceMetrics mn = meanMetrics(m);
+
+    PerformanceMetrics acc;
+    acc.accuracy = 0.0;
+    acc.hausdorff = 0.0;
+    acc.absDiff = 0.0;
+
+    for(size_t i = 0; i < m.size(); ++i) {
+        acc.accuracy += pow(m[i].accuracy-mn.accuracy, 2.0);
+        acc.hausdorff += pow(m[i].hausdorff-mn.hausdorff, 2.0);
+        acc.absDiff += pow(m[i].absDiff-mn.absDiff, 2.0);
+    }
+
+    acc.accuracy = sqrt(acc.accuracy / (m.size()-1));
+    acc.hausdorff = sqrt(acc.hausdorff / (m.size()-1));
+    acc.absDiff = sqrt(acc.absDiff / (m.size()-1));
+
+    return acc;
+}
+
+PerformanceMetrics minMetrics(std::vector<PerformanceMetrics>& m) {
+    PerformanceMetrics acc;
+    acc.accuracy = m[0].accuracy;
+    acc.hausdorff = m[0].hausdorff;
+    acc.absDiff = m[0].absDiff;
+
+    for(size_t i = 1; i < m.size(); ++i) {
+        if(acc.accuracy > m[i].accuracy)
+            acc.accuracy = m[i].accuracy;
+        if(acc.hausdorff > m[i].hausdorff)
+            acc.hausdorff = m[i].hausdorff;
+        if(acc.absDiff > m[i].absDiff)
+            acc.absDiff = m[i].absDiff;
+    }
+
+    return acc;
+}
+
+PerformanceMetrics maxMetrics(std::vector<PerformanceMetrics>& m) {
+    PerformanceMetrics acc;
+    acc.accuracy = 0.0;
+    acc.hausdorff = 0.0;
+    acc.absDiff = 0.0;
+
+    for(size_t i = 0; i < m.size(); ++i) {
+        if(acc.accuracy < m[i].accuracy)
+            acc.accuracy = m[i].accuracy;
+        if(acc.hausdorff < m[i].hausdorff)
+            acc.hausdorff = m[i].hausdorff;
+        if(acc.absDiff < m[i].absDiff)
+            acc.absDiff = m[i].absDiff;
     }
 
     return acc;
@@ -186,6 +252,21 @@ class SynthEvalDeformable
         return filter->GetTotalOverlap();
     }
 
+    template <typename TImageType>
+    static double HausdorffDistance(typename TImageType::Pointer image1, typename TImageType::Pointer image2) {
+        typedef itk::HausdorffDistanceImageFilter<TImageType, TImageType> FilterType;
+        typedef typename FilterType::Pointer FilterPointer;
+
+        FilterPointer filter = FilterType::New();
+
+        filter->SetInput1(image1);
+        filter->SetInput2(image2);
+        filter->SetUseImageSpacing(true);
+        filter->Update();
+
+        return filter->GetHausdorffDistance();
+    }
+
     static void Evaluate(
         ImagePointer refImage,
         ImagePointer refImageMask,
@@ -245,6 +326,8 @@ class SynthEvalDeformable
 
             beforePM.accuracy = LabelAccuracy<LabelImageType>(floImageLabel, refImageLabel);
 
+            beforePM.hausdorff = HausdorffDistance<LabelImageType>(floImageLabel, refImageLabel);
+
             typename ImageType::Pointer afterDiff = IPT::DifferenceImage(refImage, registeredImage);
 
             typename IPT::ImageStatisticsData afterStats = IPT::ImageStatistics(afterDiff);
@@ -252,11 +335,13 @@ class SynthEvalDeformable
 
             afterPM.accuracy = LabelAccuracy<LabelImageType>(registeredLabel, refImageLabel);
 
+            afterPM.hausdorff = HausdorffDistance<LabelImageType>(registeredLabel, refImageLabel);
+
             t.beforePerf.push_back(beforePM);
             t.afterPerf.push_back(afterPM);
 
-            std::cout << "Before: (" << beforePM.accuracy << ", " << beforePM.absDiff << ")." << std::endl;
-            std::cout << "After: (" << afterPM.accuracy << ", " << afterPM.absDiff << ")." << std::endl;
+            printMetrics(beforePM, "[Before]");
+            printMetrics(afterPM, "[After]");
 
             std::string prefix = "./synth";
             prefix += ('0' + metricID);
@@ -279,6 +364,12 @@ class SynthEvalDeformable
 
     static int MainFunc(int argc, char** argv) {
         itk::MultiThreader::SetGlobalMaximumNumberOfThreads(1);
+        
+        itk::TimeProbesCollectorBase chronometer;
+        itk::MemoryProbesCollectorBase memorymeter;
+
+        chronometer.Start("Evaluation");
+        memorymeter.Start("Evaluation");
 
         EvaluationConfig config = readEvaluationConfig(argv[2]);
         std::cout << "Evaluation config read..." << std::endl;
@@ -327,6 +418,8 @@ class SynthEvalDeformable
             metricID = 0;
         else if(config.metricName == "msd")
             metricID = 1;
+        else if(config.metricName == "mi")
+            metricID = 2;
         else {
             std::cout << "Unreconized metric name: alpha-amd or msd supported." << std::endl;
             return -1;
@@ -364,14 +457,21 @@ class SynthEvalDeformable
             }
         }
 
+        chronometer.Stop("Evaluation");
+        memorymeter.Stop("Evaluation");
 
-            PerformanceMetrics beforeMean = meanMetrics(beforePerf);
-            PerformanceMetrics afterMean = meanMetrics(afterPerf);
-            std::cout << "Before mean" << std::endl;
-            printMetrics(beforeMean);
-            std::cout << std::endl << "After mean" << std::endl;
-            printMetrics(afterMean);
-            std::cout << std::endl;
+        chronometer.Report(std::cout);
+        memorymeter.Report(std::cout);
+
+            printMetrics(meanMetrics(beforePerf), "[Before mean]");
+            printMetrics(meanMetrics(afterPerf), "[After mean]");
+            printMetrics(sdMetrics(beforePerf), "[Before sd]");
+            printMetrics(sdMetrics(afterPerf), "[After sd]");
+            printMetrics(minMetrics(beforePerf), "[Before min]");
+            printMetrics(minMetrics(afterPerf), "[After min]");
+            printMetrics(maxMetrics(beforePerf), "[Before max]");
+            printMetrics(maxMetrics(afterPerf), "[After max]");
+
 
         return 0;
     }

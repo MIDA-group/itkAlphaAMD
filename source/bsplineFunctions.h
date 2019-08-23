@@ -42,6 +42,8 @@
 #include "itkRegularStepGradientDescentOptimizerv4.h"
 #include "itkImageRegistrationMethodv4.h"
 #include "itkMeanSquaresImageToImageMetricv4.h"
+#include "itkMattesMutualInformationImageToImageMetricv4.h"
+#include "itkRegistrationParameterScalesFromPhysicalShift.h"
 
 #include <fstream>
 #include <sstream>
@@ -939,9 +941,17 @@ void register_func_baseline(typename ImageType::Pointer fixedImage, typename Ima
         typedef itk::RegularStepGradientDescentOptimizerv4<double> OptimizerType;
         typename OptimizerType::Pointer optimizer = OptimizerType::New();
 
+        using ScalesEstimatorType = itk::RegistrationParameterScalesFromPhysicalShift<MT>;
+        typename ScalesEstimatorType::Pointer scalesEstimator = ScalesEstimatorType::New();
+        scalesEstimator->SetMetric( metric );
+        scalesEstimator->SetTransformForward( true );
+        //scalesEstimator->SetSmallParameterVariation( 0.001 );
+
         optimizer->SetNumberOfIterations(iterations);
         optimizer->SetLearningRate(lr1);
-        optimizer->DoEstimateLearningRateOnceOff();
+        optimizer->SetScalesEstimator(scalesEstimator);
+        //optimizer->DoEstimateLearningRateOnceOn();
+        //optimizer->DoEstimateLearningRateAtEachIterationOn();
         optimizer->SetMinimumStepLength(0.0);
         optimizer->SetGradientMagnitudeTolerance(1e-8);
         optimizer->SetRelaxationFactor(0.95);
@@ -1076,6 +1086,12 @@ void bspline_register_baseline(
             BLMetricPointer metric = BLMetricType::New();
 
             register_func_baseline<itk::MeanSquaresImageToImageMetricv4<ImageType, ImageType> >(fixedImagePrime, movingImagePrime, transformForward, transformInverse, paramSet, fixedMaskPrime, movingMaskPrime, metric, verbose);
+        } else if(metricID == 1) {
+            typedef itk::MattesMutualInformationImageToImageMetricv4<ImageType, ImageType> BLMetricType;
+            typedef typename BLMetricType ::Pointer BLMetricPointer;
+            BLMetricPointer metric = BLMetricType::New();
+
+            register_func_baseline<itk::MattesMutualInformationImageToImageMetricv4<ImageType, ImageType> >(fixedImagePrime, movingImagePrime, transformForward, transformInverse, paramSet, fixedMaskPrime, movingMaskPrime, metric, verbose);
         }
         
     }
