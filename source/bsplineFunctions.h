@@ -74,6 +74,8 @@ struct BSplineRegParam
     double normalization;
     double learningRate;
     double lambdaFactor;
+    unsigned long long seed;
+    std::string samplingMode;
     std::vector<BSplineRegParamInner> innerParams;
 };
 
@@ -133,6 +135,10 @@ BSplineRegParamOuter readConfig(std::string path) {
         readJSONKey(m_i, "learningRate", &paramSet.learningRate);
         paramSet.lambdaFactor = 0.01;
         readJSONKey(m_i, "lambdaFactor", &paramSet.lambdaFactor);
+        paramSet.samplingMode = "quasi";
+        readJSONKey(m_i, "samplingMode", &paramSet.samplingMode);
+        paramSet.seed = 1337;
+        readJSONKey(m_i, "seed", &paramSet.seed);
 
         //auto innerConfig = config[i]["inner"];
         //std::cout << "Access innerConfig" << i << " of size " << jc["paramSets"][i]["innerParams"].size() << std::endl;
@@ -570,7 +576,7 @@ void register_func(typename ImageType::Pointer fixedImage, typename ImageType::P
 
     MetricPointer metric = MetricType::New();
 
-    metric->SetRandomSeed(1337);
+    metric->SetRandomSeed(param.seed);
 
     metric->SetFixedImage(fixedImage);
     metric->SetMovingImage(movingImage);
@@ -582,6 +588,12 @@ void register_func(typename ImageType::Pointer fixedImage, typename ImageType::P
 
     metric->SetFixedSamplingPercentage(param.samplingFraction);
     metric->SetMovingSamplingPercentage(param.samplingFraction);
+
+    if(param.samplingMode == "quasi") {
+        metric->SetUseQuasiRandomSampling(true);
+    } else if(param.samplingMode == "uniform") {
+        metric->SetUseQuasiRandomSampling(false);
+    }
 
     if(fixedMask) {
         typename IPT::BinaryImagePointer maskBin = IPT::ThresholdImage(fixedMask, 0.01);
@@ -652,7 +664,7 @@ void register_func(typename ImageType::Pointer fixedImage, typename ImageType::P
         optimizer->DoEstimateLearningRateOnceOff();
         optimizer->SetMinimumStepLength(0.0);
         optimizer->SetGradientMagnitudeTolerance(1e-8);
-        optimizer->SetRelaxationFactor(0.95);
+        optimizer->SetRelaxationFactor(0.999999);
         optimizer->DoEstimateScalesOff();
 
         optimizer->SetMetric(metric.GetPointer());

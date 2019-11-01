@@ -11,6 +11,7 @@
 #include "itkBSplineTransform.h"
 
 #include "itkMersenneTwisterRandomVariateGenerator.h"
+#include "samplers.h"
 
 #include "itkAlphaSMDMetricInternal2.h"
 
@@ -131,7 +132,7 @@ class AlphaSMDObjectToObjectMetricDeformv4 : public ObjectToObjectMetricBaseTemp
 		}
 	}
 
-	void EvaluateAsymmetricMetric(DerivativeType &derivative, bool forwardDirection, TransformType *transformForward, TransformType *transformInverse, std::vector<SourcePointType> &srcPoints, unsigned int count, double factor, itk::Vector<double, 2U> &values) const
+	void EvaluateAsymmetricMetric(DerivativeType &derivative, bool forwardDirection, TransformType *transformForward, TransformType *transformInverse, std::vector<SourcePointType> &srcPoints, std::vector<unsigned int>& srcPointIndices, unsigned int count, double factor, itk::Vector<double, 2U> &values) const
 	{
 		double smoothingFactor = 0.1;
 		double metricAcc = 0.0;
@@ -164,7 +165,7 @@ class AlphaSMDObjectToObjectMetricDeformv4 : public ObjectToObjectMetricBaseTemp
 
 		for (unsigned int i = 0; i < count; ++i)
 		{
-			SourcePointType sp = srcPoints[i];
+			SourcePointType sp = srcPoints[srcPointIndices[i]];
 
 			// Apply transformation
 
@@ -302,23 +303,25 @@ class AlphaSMDObjectToObjectMetricDeformv4 : public ObjectToObjectMetricBaseTemp
 
 		// Shuffle the (Fixed) source points
 
-		unsigned fixedCount = (unsigned int)RandomShuffle(m_FixedSourcePoints, m_FixedSamplingPercentage, m_Fixed_RNG.GetPointer());
+		//unsigned fixedCount = (unsigned int)RandomShuffle(m_FixedSourcePoints, m_FixedSamplingPercentage, m_Fixed_RNG.GetPointer());
+		SampleFixedPoints(m_FixedSamplingPercentage);
 
-		assert(fixedCount <= m_FixedSourcePoints.size());
+		//assert(fixedCount <= m_FixedSourcePoints.size());
 
 		double factor = (m_SymmetricMeasure ? 0.5 : 1.0);
 
-		EvaluateAsymmetricMetric(derivative, true, m_TransformForwardRawPtr, m_TransformInverseRawPtr, m_FixedSourcePoints, fixedCount, factor, valuePair);
+		EvaluateAsymmetricMetric(derivative, true, m_TransformForwardRawPtr, m_TransformInverseRawPtr, m_FixedSourcePoints, m_FixedSourceIndices, m_FixedSourceIndices.size(), factor, valuePair);
 
 		if (m_SymmetricMeasure)
 		{
 			// Shuffle the (Moving) source points
 
-			unsigned int movingCount = (unsigned int)RandomShuffle(m_MovingSourcePoints, m_MovingSamplingPercentage, m_Moving_RNG.GetPointer());
+			//unsigned int movingCount = (unsigned int)RandomShuffle(m_MovingSourcePoints, m_MovingSamplingPercentage, m_Moving_RNG.GetPointer());
+			SampleMovingPoints(m_MovingSamplingPercentage);
 
-			assert(movingCount <= m_MovingSourcePoints.size());
+			//assert(movingCount <= m_MovingSourcePoints.size());
 
-			EvaluateAsymmetricMetric(derivative, false, m_TransformInverseRawPtr, m_TransformForwardRawPtr, m_MovingSourcePoints, movingCount, factor, valuePair);
+			EvaluateAsymmetricMetric(derivative, false, m_TransformInverseRawPtr, m_TransformForwardRawPtr, m_MovingSourcePoints, m_MovingSourceIndices, m_MovingSourceIndices.size(), factor, valuePair);
 		}
 
 		m_MetricValues = valuePair;
@@ -570,10 +573,22 @@ class AlphaSMDObjectToObjectMetricDeformv4 : public ObjectToObjectMetricBaseTemp
 		m_MaxDistance = d;
 	}
 
+	virtual bool GetUseQuasiRandomSampling() const {
+		return m_DoQuasiRandomSampling;
+	}
+
+	virtual void SetUseQuasiRandomSampling(bool flag) {
+		m_DoQuasiRandomSampling = flag;
+	}
+
 	virtual void SetRandomSeed(int seed)
 	{
 		m_Fixed_RNG->SetSeed(seed);
 		m_Moving_RNG->SetSeed(seed);
+		m_FixedQMCSampler.SetSeed(seed);
+		m_MovingQMCSampler.SetSeed(seed);
+		m_FixedQMCSampler.Restart();
+		m_MovingQMCSampler.Restart();
 	}
 	// Do the pre-processing to set up the measure for evaluating the distance and derivative
 
@@ -613,10 +628,17 @@ class AlphaSMDObjectToObjectMetricDeformv4 : public ObjectToObjectMetricBaseTemp
 		internals.SetLinearInterpolation(m_LinearInterpolation);
 		internals.SetSymmetric(m_SymmetricMeasure);
 
+		internals.SetExcludeMaskedPoints(!m_DoQuasiRandomSampling);
+
 		internals.Update();
 
 		m_FixedSourcePoints = internals.GetRefSourcePoints();
 		m_MovingSourcePoints = internals.GetFloSourcePoints();
+
+		m_FixedQMCSampler.SetSize(m_FixedImage->GetLargestPossibleRegion().GetSize());
+		m_MovingQMCSampler.SetSize(m_MovingImage->GetLargestPossibleRegion().GetSize());
+		m_FixedRandomSampler.SetTotalIndices(m_FixedSourcePoints.size());
+		m_MovingRandomSampler.SetTotalIndices(m_MovingSourcePoints.size());
 
 		//m_Param = ParametersType(GetNumberOfParameters());
 		UpdateAfterTransformChange();
@@ -709,11 +731,40 @@ class AlphaSMDObjectToObjectMetricDeformv4 : public ObjectToObjectMetricBaseTemp
 		m_Moving_RNG->SetSeed(42);
 		m_SymmetryLambda = 0.0;
 		m_DoRandomize = true;
+		m_DoQuasiRandomSampling = true;
+		m_FixedQMCSampler.SetSeed(42);
+		m_MovingQMCSampler.SetSeed(42);
+		m_FixedQMCSampler.Restart();
+		m_MovingQMCSampler.Restart();
 	}
 	virtual ~AlphaSMDObjectToObjectMetricDeformv4() {}
 
+	void SampleFixedPoints(double samplingPercentage) const {
+		unsigned int count = (unsigned int)(samplingPercentage * m_FixedSourcePoints.size() + 0.5);
+
+		if(m_DoQuasiRandomSampling) {
+			//m_FixedQMCSampler.Restart();
+			m_FixedQMCSampler.SampleIndices(count, m_FixedSourceIndices);
+			//std::cout << "Point: " << m_FixedSourcePoints[m_FixedSourceIndices[count-1]].m_SourcePoint << std::endl;
+		} else {
+			m_FixedRandomSampler.SampleIndices(count, m_FixedSourceIndices);
+		}
+	}
+
+	void SampleMovingPoints(double samplingPercentage) const {
+		unsigned int count = (unsigned int)(samplingPercentage * m_MovingSourcePoints.size() + 0.5);
+
+		if(m_DoQuasiRandomSampling) {
+			//m_MovingQMCSampler.Restart();
+			m_MovingQMCSampler.SampleIndices(count, m_MovingSourceIndices);
+		} else {
+			m_MovingRandomSampler.SampleIndices(count, m_MovingSourceIndices);
+		}
+	}
+
 	int RandomShuffle(std::vector<SourcePointType> &ps, double samplingPercentage, GeneratorType *rng) const
 	{
+
 		int count = (int)(samplingPercentage * ps.size() + 0.5);
 
 		if (count >= ps.size())
@@ -773,6 +824,9 @@ class AlphaSMDObjectToObjectMetricDeformv4 : public ObjectToObjectMetricBaseTemp
 	mutable std::vector<SourcePointType> m_FixedSourcePoints;
 	mutable std::vector<SourcePointType> m_MovingSourcePoints;
 
+	mutable std::vector<unsigned int> m_FixedSourceIndices;
+	mutable std::vector<unsigned int> m_MovingSourceIndices;
+
 	// Images
 
 	ImagePointer m_FixedImage;
@@ -786,10 +840,16 @@ class AlphaSMDObjectToObjectMetricDeformv4 : public ObjectToObjectMetricBaseTemp
 
 	// Random number generator
 
+	mutable QMCSampler<Dim> m_FixedQMCSampler;
+	mutable QMCSampler<Dim> m_MovingQMCSampler;
+	mutable RandomSampler m_FixedRandomSampler;
+	mutable RandomSampler m_MovingRandomSampler;
+
 	typename GeneratorType::Pointer m_Fixed_RNG;
 	typename GeneratorType::Pointer m_Moving_RNG;
 
 	bool m_DoRandomize;
+	bool m_DoQuasiRandomSampling;
 
 	// Transform
 

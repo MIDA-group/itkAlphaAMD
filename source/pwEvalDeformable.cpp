@@ -16,15 +16,10 @@
 
 struct EvaluationConfig {
     unsigned int count;
-    double deformationMagnitude;
-    unsigned int controlPoints;
     unsigned int seed;
-    double noiseSigma;
     std::string metricName;
-
-    std::string imagePath;
-    std::string imageMaskPath;
-    std::string imageLabelPath;
+    std::vector<std::string> images;
+    std::vector<std::string> labels;
     std::string methodConfigPath;
 };
 
@@ -34,24 +29,20 @@ EvaluationConfig readEvaluationConfig(std::string path) {
     EvaluationConfig c;
 
     c.count = (unsigned int)jc["count"];
-    c.deformationMagnitude = (double)jc["deformationMagnitude"];
-    c.controlPoints = (unsigned int)jc["controlPoints"];
-    c.seed = (unsigned int)jc["seed"];
-    c.noiseSigma = (double)jc["noiseSigma"];
     c.metricName = jc["metric"];
+    for(unsigned int i = 0; i< jc["images"].size(); ++i)
+        c.images.push_back(jc["images"][i]);
+    for(unsigned int i = 0; i< jc["labels"].size(); ++i)
+        c.labels.push_back(jc["labels"][i]);
 
-    c.imagePath = jc["imagePath"];
-    c.imageMaskPath = jc["imageMaskPath"];
-    c.imageLabelPath = jc["imageLabelPath"];
-    if(jc.find("methodConfigPath") != jc.end())
-        c.methodConfigPath = jc["methodConfigPath"];   
+    c.methodConfigPath = jc["methodConfigPath"];
 
     return c;
 }
 
 struct PerformanceMetrics {
-    double accuracy;
-    double hausdorff;
+    double totalOverlap;
+    double meanTotalOverlap;
     double absDiff;
 };
 
@@ -64,12 +55,12 @@ struct EvalThread {
 };
 
 void printMetrics(PerformanceMetrics m, std::string name, bool linebreak=true) {
-    std::cout << name << "(acc: " << m.accuracy << ", hausdorff: " << m.hausdorff << ", absdiff: " << m.absDiff << ").";
+    std::cout << name << "(totalOverlap: " << m.totalOverlap << ", meanTotalOverlap: " << m.meanTotalOverlap << ", absdiff: " << m.absDiff << ").";
     if(linebreak)
         std::cout << std::endl;
 }
 
-PerformanceMetrics meanMetrics(std::vector<PerformanceMetrics>& m) {
+/*PerformanceMetrics meanMetrics(std::vector<PerformanceMetrics>& m) {
     PerformanceMetrics acc;
     acc.accuracy = 0.0;
     acc.hausdorff = 0.0;
@@ -139,32 +130,32 @@ PerformanceMetrics maxMetrics(std::vector<PerformanceMetrics>& m) {
     }
 
     return acc;
-}
+}*/
 
 void SaveMetrics(const char* path, const std::vector<PerformanceMetrics>& m) {
     FILE *f = fopen(path, "wb");
 
-    // Write accuracy
+    // Write totalOverlap
     for (size_t i = 0; i < m.size(); ++i)
     {
         if (i > 0)
             fprintf(f, ",");
 
-        fprintf(f, "%.7f", m[i].accuracy);
+        fprintf(f, "%.7f", m[i].totalOverlap);
     }
     fprintf(f, "\n");
 
-    // Write Hausdorff
+    // Write meanTotalOverlap
     for (size_t i = 0; i < m.size(); ++i)
     {
         if (i > 0)
             fprintf(f, ",");
 
-        fprintf(f, "%.7f", m[i].hausdorff);
+        fprintf(f, "%.7f", m[i].meanTotalOverlap);
     }
     fprintf(f, "\n");
 
-    // Write accuracy
+    // Write absdiff
     for (size_t i = 0; i < m.size(); ++i)
     {
         if (i > 0)
@@ -178,7 +169,7 @@ void SaveMetrics(const char* path, const std::vector<PerformanceMetrics>& m) {
 }
 
 template <unsigned int ImageDimension>
-class SynthEvalDeformable
+class PWEvalDeformable
 {
     public:
 
@@ -211,26 +202,6 @@ class SynthEvalDeformable
     static ImagePointer BlackAndWhiteChessboard(ImagePointer refImage, int cells)
     {
         return Chessboard(IPT::ZeroImage(refImage->GetLargestPossibleRegion().GetSize()), IPT::ConstantImage(1.0, refImage->GetLargestPossibleRegion().GetSize()), cells);
-    }
-
-    template <typename TransformType>
-    static void RandomizeDeformableTransform(typename TransformType::Pointer transform, double magnitude, unsigned int seed)
-    {
-        auto N = transform->GetNumberOfParameters();
-        typedef itk::Statistics::MersenneTwisterRandomVariateGenerator GeneratorType;
-        typename GeneratorType::Pointer RNG = GeneratorType::New();
-        RNG->SetSeed(seed);
-
-        typename TransformType::DerivativeType delta(N);
-
-        for (unsigned int i = 0; i < N; ++i)
-        {
-            double x = RNG->GetVariateWithClosedRange();
-            double y = (-1.0 + 2.0 * x) * magnitude;
-            delta[i] = y;
-        }
-
-        transform->UpdateTransformParameters(delta, 1.0);
     }
 
     template <typename TImageType, typename TTransformType>
@@ -275,7 +246,7 @@ class SynthEvalDeformable
     }
 
     template <typename TImageType>
-    static double LabelAccuracy(typename TImageType::Pointer image1, typename TImageType::Pointer image2) {
+    static void LabelAccuracy(typename TImageType::Pointer image1, typename TImageType::Pointer image2, double& totalOverlap, double& meanTotalOverlap) {
         typedef itk::LabelOverlapMeasuresImageFilter<TImageType> FilterType;
         typedef typename FilterType::Pointer FilterPointer;
 
@@ -286,32 +257,37 @@ class SynthEvalDeformable
 
         filter->Update();
 
-        return filter->GetTotalOverlap();
-    }
+        totalOverlap = filter->GetTotalOverlap();
 
-    template <typename TImageType>
-    static double HausdorffDistance(typename TImageType::Pointer image1, typename TImageType::Pointer image2) {
-        typedef itk::HausdorffDistanceImageFilter<TImageType, TImageType> FilterType;
-        typedef typename FilterType::Pointer FilterPointer;
+        typedef typename FilterType::MapType MapType;
+        typedef typename FilterType::MapConstIterator MapConstIterator;
+    
+        double overlapAcc = 0.0;
+        unsigned int overlapCount = 0;
 
-        FilterPointer filter = FilterType::New();
+        MapType map = filter->GetLabelSetMeasures();
+        for (MapConstIterator mapIt = map.begin(); mapIt != map.end(); ++mapIt) {
+            // Do not include the background in the final value.
+            if ((*mapIt).first == 0)
+            {
+                continue;
+            }
+            double numerator = (double)(*mapIt).second.m_Intersection;
+            double denominator = (double)(*mapIt).second.m_Target;
+            if(denominator > 0) {
+                overlapAcc += (numerator/denominator);
+                ++overlapCount;
+            }
+        }
 
-        filter->SetInput1(image1);
-        filter->SetInput2(image2);
-        filter->SetUseImageSpacing(true);
-        filter->Update();
-
-        return filter->GetHausdorffDistance();
+        meanTotalOverlap = overlapAcc / overlapCount;
     }
 
     static void Evaluate(
-        ImagePointer refImage,
-        ImagePointer refImageMask,
-        LabelImagePointer refImageLabel,
-        unsigned int controlPointCount,
-        double transformMagnitude,
-        const std::vector<unsigned int>& seeds,
-        double noiseSigma,
+        const std::vector<std::string>& images,
+        const std::vector<std::string>& labels,
+        std::vector<unsigned int>& refIndices,
+        std::vector<unsigned int>& floIndices,
         BSplineRegParamOuter& params,
         unsigned int metricID,
         EvalThread& t)
@@ -322,32 +298,31 @@ class SynthEvalDeformable
         typedef typename BSplineFunc::TransformType TransformType;
         typedef typename BSplineFunc::TransformType::Pointer TransformPointer;
 	
-        ImagePointer cbImage = BlackAndWhiteChessboard(refImage, 32);
-
         unsigned int startIndex = t.startIndex;
         unsigned int endIndex = t.endIndex;
 
-        //std::cout << refImage << std::endl;
-
         for(unsigned int i = startIndex; i < endIndex; ++i) {
-            TransformPointer randTransform = bsf.CreateBSplineTransform(refImage, controlPointCount);
-            RandomizeDeformableTransform<TransformType>(randTransform, transformMagnitude, seeds[i]);
+            unsigned int refIndex = refIndices[i];
+            unsigned int floIndex = floIndices[i];
 
-            ImagePointer floImage = ApplyTransform<ImageType, TransformType>(refImage, refImage, randTransform, 1, 0.0);
-            ImagePointer floImageMask = ApplyTransform<ImageType, TransformType>(refImageMask, refImageMask, randTransform, 0, 0.0);
-            LabelImagePointer floImageLabel = ApplyTransform<LabelImageType, TransformType>(refImageLabel, refImageLabel, randTransform, 0, 0);
+            ImagePointer refImage = IPT::LoadImage(images[refIndex].c_str());
+            ImagePointer floImage = IPT::LoadImage(images[floIndex].c_str());
+            LabelImagePointer refImageLabel = IPT::LoadLabelImage(labels[refIndex].c_str());
+            LabelImagePointer floImageLabel = IPT::LoadLabelImage(labels[floIndex].c_str());
 
-    	    ImagePointer refImageNoisy = IPT::AdditiveNoise(refImage, noiseSigma, 0.0, seeds[i]*19+13, true);
-	        ImagePointer floImageNoisy = IPT::AdditiveNoise(floImage, noiseSigma, 0.0, seeds[i]*17+11, true);
+            ImagePointer refImageMask = IPT::ConstantImage(1.0, refImage->GetLargestPossibleRegion().GetSize());
+            ImagePointer floImageMask = IPT::ConstantImage(1.0, floImage->GetLargestPossibleRegion().GetSize());
+
+            ImagePointer cbImage = BlackAndWhiteChessboard(refImage, 32);
 
             TransformPointer forwardTransform;
             TransformPointer inverseTransform;
 
             bool verbose = true;
             if(metricID == 0) {
-                bsf.bspline_register(refImageNoisy, floImageNoisy, params, refImageMask, floImageMask, verbose, forwardTransform, inverseTransform);
+                bsf.bspline_register(refImage, floImage, params, refImageMask, floImageMask, verbose, forwardTransform, inverseTransform);
             } else {
-                bsf.bspline_register_baseline(refImageNoisy, floImageNoisy, params, refImageMask, floImageMask, verbose, forwardTransform, inverseTransform, metricID-1);
+                bsf.bspline_register_baseline(refImage, floImage, params, refImageMask, floImageMask, verbose, forwardTransform, inverseTransform, metricID-1);
             }
 
             ImagePointer registeredImage = ApplyTransform<ImageType, TransformType>(refImage, floImage, forwardTransform, 1, 0.0);
@@ -361,18 +336,22 @@ class SynthEvalDeformable
             typename IPT::ImageStatisticsData beforeStats = IPT::ImageStatistics(beforeDiff);
             beforePM.absDiff = beforeStats.mean;
 
-            beforePM.accuracy = LabelAccuracy<LabelImageType>(floImageLabel, refImageLabel);
-
-            beforePM.hausdorff = HausdorffDistance<LabelImageType>(floImageLabel, refImageLabel);
+            double totalOverlap;
+            double meanTotalOverlap;
+            LabelAccuracy<LabelImageType>(floImageLabel, refImageLabel, totalOverlap, meanTotalOverlap);
+            beforePM.totalOverlap = totalOverlap;
+            beforePM.meanTotalOverlap = meanTotalOverlap;
+            //beforePM.totalOverlap = LabelAccuracy<LabelImageType>(floImageLabel, refImageLabel);
 
             typename ImageType::Pointer afterDiff = IPT::DifferenceImage(refImage, registeredImage);
 
             typename IPT::ImageStatisticsData afterStats = IPT::ImageStatistics(afterDiff);
             afterPM.absDiff = afterStats.mean;
 
-            afterPM.accuracy = LabelAccuracy<LabelImageType>(registeredLabel, refImageLabel);
-
-            afterPM.hausdorff = HausdorffDistance<LabelImageType>(registeredLabel, refImageLabel);
+            //afterPM.accuracy = LabelAccuracy<LabelImageType>(registeredLabel, refImageLabel);
+            LabelAccuracy<LabelImageType>(registeredLabel, refImageLabel, totalOverlap, meanTotalOverlap);
+            afterPM.totalOverlap = totalOverlap;
+            afterPM.meanTotalOverlap = meanTotalOverlap;
 
             t.beforePerf.push_back(beforePM);
             t.afterPerf.push_back(afterPM);
@@ -380,21 +359,15 @@ class SynthEvalDeformable
             printMetrics(beforePM, "[Before]");
             printMetrics(afterPM, "[After]");
 
-            std::string prefix = "./synth";
+            std::string prefix = "./results/synth";
             prefix += ('0' + metricID);
             
             if(i == 0) {
-                ImagePointer deformedCBImage = ApplyTransform<ImageType, TransformType>(refImage, cbImage, randTransform, 1, 0.0);
                 ImagePointer transformedCBImage = ApplyTransform<ImageType, TransformType>(refImage, cbImage, forwardTransform, 1, 0.0);
                 
-                IPT::SaveImageU8(prefix + "_noisy_ref.png", refImageNoisy);
-                IPT::SaveImageU8(prefix + "_deformed.png", floImage);
-                IPT::SaveImageU8(prefix + "_noisy_deformed.png", floImageNoisy);
-                IPT::SaveImageU8(prefix + "_registered.png", registeredImage);
-                IPT::SaveImageU8(prefix + "_chessboard_deformed.png", deformedCBImage);
-                IPT::SaveImageU8(prefix + "_chessboard_registered.png", transformedCBImage);
-                IPT::SaveLabelImage(prefix + "_label_deformed.png", floImageLabel);
-                IPT::SaveLabelImage(prefix + "_label_registered.png", registeredLabel);
+                //IPT::SaveImageU16(prefix + "_registered.nii.gz", registeredImage);
+                IPT::SaveImageU16(prefix + "_chessboard_registered.nii.gz", transformedCBImage);
+                IPT::SaveLabelImage(prefix + "_label_registered.nii.gz", registeredLabel);
             }
         }
     }
@@ -409,56 +382,29 @@ class SynthEvalDeformable
         memorymeter.Start("Evaluation");
 
         EvaluationConfig config = readEvaluationConfig(argv[2]);
-        std::string outputPath;
-
         std::cout << "Evaluation config read..." << std::endl;
-        if(argc > 4) {
-            config.methodConfigPath = argv[3];
-            outputPath = argv[4];
-        }
-        else if(argc > 3) {
-            outputPath = argv[3];
-        }
         BSplineRegParamOuter params = readConfig(config.methodConfigPath);
         std::cout << "Registration config read..." << std::endl;
 
-        std::string refImagePath = config.imagePath;
-        std::string refImageMaskPath = config.imageMaskPath;
-        std::string refImageLabelPath = config.imageLabelPath;
-        //std::string refImagePath = argv[2];
-        //std::string refImageMaskPath = argv[3];
-        //std::string refImageLabelPath = argv[4];
+        std::vector<unsigned int> refIndices;
+        std::vector<unsigned int> floIndices;
 
-        unsigned int seed = config.seed;//atoi(argv[5]);
-        unsigned int count = config.count;//atoi(argv[6]);
-        double noiseSigma = config.noiseSigma;
-
-        std::vector<unsigned int> seeds;
-        for(unsigned int i = 0; i < count; ++i) {
-            seed = seed * 17 + 13;
-            seeds.push_back(seed);
+        for(unsigned int i = 0; i < config.images.size(); ++i) {
+            for(unsigned int j = 0; j < config.images.size(); ++j) {
+                if(i == j)
+                    continue;
+                refIndices.push_back(i);
+                floIndices.push_back(j);
+            }
+        }
+        if(config.count == 0) {
+            config.count = (unsigned int)refIndices.size();
         }
 
-        ImagePointer refImage = IPT::LoadImage(refImagePath.c_str());
-        ImagePointer refImageMask = IPT::LoadImage(refImageMaskPath.c_str());
-        LabelImagePointer refImageLabel = IPT::LoadLabelImage(refImageLabelPath.c_str());
+        unsigned int count = config.count;
 
         BSplineFunc bspline_func;
 
-        const unsigned int deformControlPoints = config.controlPoints;
-        const double deformMagnitude = config.deformationMagnitude;
-        /*
-    void Evaluate(
-        ImagePointer refImage,
-        ImagePointer refImageMask,
-        LabelImagePointer refImageLabel,
-        unsigned int controlPointCount,
-        double transformMagnitude,
-        const std::vector<unsigned int>& seeds,
-        unsigned int startIndex,
-        unsigned int endIndex,
-        std::vector<PerformanceMetrics>& beforePerf,
-        std::vector<PerformanceMetrics>& afterPerf)*/
         unsigned int metricID = 0;
         if(config.metricName=="alpha-amd")
             metricID = 0;
@@ -477,7 +423,16 @@ class SynthEvalDeformable
             std::vector<PerformanceMetrics> afterPerf;
         EvalThread threadData[threadCount];
         std::thread threads[threadCount];
-
+/*
+    static void Evaluate(
+        const std::vector<std::string>& images,
+        const std::vector<std::string>& labels,
+        std::vector<unsigned int>& refIndices,
+        std::vector<unsigned int>& floIndices,
+        BSplineRegParamOuter& params,
+        unsigned int metricID,
+        EvalThread& t)
+    {*/
 
         for(unsigned int i = 0; i < threadCount; ++i) {
             double spn = count/(double)threadCount;
@@ -491,7 +446,7 @@ class SynthEvalDeformable
 
             threadData[i].threadID = i;
 
-            auto fn = [&, i]() -> void { Evaluate(refImage, refImageMask, refImageLabel, deformControlPoints, deformMagnitude, seeds, noiseSigma, params, metricID, threadData[i]); };
+            auto fn = [&, i]() -> void { Evaluate(config.images, config.labels, refIndices, floIndices, params, metricID, threadData[i]); };
             threads[i] = std::thread(fn);
         }
 
@@ -509,18 +464,8 @@ class SynthEvalDeformable
         chronometer.Report(std::cout);
         memorymeter.Report(std::cout);
 
-        SaveMetrics(outputPath.c_str(), afterPerf);
-    /*
-            printMetrics(meanMetrics(beforePerf), "[Before mean]");
-            printMetrics(meanMetrics(afterPerf), "[After mean]");
-            printMetrics(sdMetrics(beforePerf), "[Before sd]");
-            printMetrics(sdMetrics(afterPerf), "[After sd]");
-            printMetrics(minMetrics(beforePerf), "[Before min]");
-            printMetrics(minMetrics(afterPerf), "[After min]");
-            printMetrics(maxMetrics(beforePerf), "[Before max]");
-            printMetrics(maxMetrics(afterPerf), "[After max]");
-            */
-
+        SaveMetrics("before_metrics.csv", beforePerf);
+        SaveMetrics("after_metrics.csv", afterPerf);
 
         return 0;
     }

@@ -528,6 +528,53 @@ void ImageToMaskedSourcePointSet(
 	}
 }
 
+template <typename QType, unsigned int Dim>
+void ImageToSourcePointSet(
+	typename itk::Image<QType, Dim>::Pointer image,
+	typename itk::Image<bool, Dim>::Pointer mask,
+	typename itk::Image<double, Dim>::Pointer weightImage,
+	std::vector<SourcePoint<QType, Dim> >& spsOut) {
+
+	typedef itk::ImageRegionConstIterator<itk::Image<QType, Dim> > IteratorType;
+	typedef itk::ImageRegionConstIterator<itk::Image<double, Dim> > WeightIteratorType;
+	typedef itk::ImageRegionConstIterator<itk::Image<bool, Dim> > MaskIteratorType;
+
+	IteratorType it( image, image->GetLargestPossibleRegion() );
+	WeightIteratorType itWeight( weightImage, weightImage->GetLargestPossibleRegion() );
+	MaskIteratorType itMask( mask, mask->GetLargestPossibleRegion() );
+  	it.GoToBegin();
+  	itWeight.GoToBegin();
+  	itMask.GoToBegin();
+
+	itk::Point<double, Dim> point;
+	SourcePoint<QType, Dim> sp;
+
+	while( !it.IsAtEnd() )
+    {
+		assert(!itMask.IsAtEnd());
+		assert(!itWeight.IsAtEnd());
+
+		double wgt = itWeight.Get();
+		bool fmask = itMask.Get() ? 1.0 : 0.0;
+
+		// Read the point position
+		image->TransformIndexToPhysicalPoint(it.GetIndex(), point);
+		sp.m_SourcePoint = point; 
+
+		// Read the height
+		sp.m_Height = it.Get();
+
+		// Initialize to unit weight
+		sp.m_Weight = fmask*itWeight.Get();
+
+		spsOut.push_back(sp);
+		
+		++it;
+		++itMask;
+		++itWeight;
+	}
+}
+
 template <typename ValueType, typename QType, unsigned int Dim>
 class ImageStack
 {
@@ -737,6 +784,10 @@ class AlphaSMDInternal
 		m_FloWeight = floWeight;
 	}
 
+	void SetExcludeMaskedPoints(bool flag) {
+		m_ExcludeMaskedPoints = flag;
+	}
+
 	// Generated products getters
 
 	std::vector<SourcePoint<QType, Dim> > GetRefSourcePoints() const {
@@ -812,7 +863,10 @@ class AlphaSMDInternal
 			
 			m_RefSourcePoints.clear();
 
-			ImageToMaskedSourcePointSet<QType, Dim>(refQuantImage, m_RefMask, m_RefWeight, m_RefSourcePoints);
+			if(m_ExcludeMaskedPoints)
+				ImageToMaskedSourcePointSet<QType, Dim>(refQuantImage, m_RefMask, m_RefWeight, m_RefSourcePoints);
+			else
+				ImageToSourcePointSet<QType, Dim>(refQuantImage, m_RefMask, m_RefWeight, m_RefSourcePoints);
 		}
 	
 		{ // Proprocess floating image
@@ -846,7 +900,10 @@ class AlphaSMDInternal
 			// Only generate the floating image source point set if the measure is set to symmetric mode
 
 			if(m_Symmetric) {
-				ImageToMaskedSourcePointSet<QType, Dim>(floQuantImage, m_FloMask, m_FloWeight, m_FloSourcePoints);
+				if(m_ExcludeMaskedPoints)
+					ImageToMaskedSourcePointSet<QType, Dim>(floQuantImage, m_FloMask, m_FloWeight, m_FloSourcePoints);
+				else
+					ImageToSourcePointSet<QType, Dim>(floQuantImage, m_FloMask, m_FloWeight, m_FloSourcePoints);
 			}
 		}
 
@@ -1160,6 +1217,7 @@ class AlphaSMDInternal
 	bool m_SquaredMeasure;
 	bool m_LinearInterpolation;
 	bool m_Symmetric;
+	bool m_ExcludeMaskedPoints;
 
 	// Input
 
