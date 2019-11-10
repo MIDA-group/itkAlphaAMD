@@ -4,29 +4,139 @@
 #include <itkImageRegionConstIterator.h>
 #include <cmath>
 
-template <unsigned int ImageDimension>
-inline double InterpolateDistances(itk::Vector<double, ImageDimension> frac, itk::Array<double> distances, itk::Vector<double, ImageDimension>& grad);
+template <typename Dim>
+struct ValuedCornerPoints;
 
 template <>
-inline double InterpolateDistances<2U>(itk::Vector<double, 2U> frac, itk::Array<double> distances, itk::Vector<double, 2U>& grad) {
+struct ValuedCornerPoints<1U> {
+  itk::Vector<double, 2U> m_Values;
+};
+
+template <>
+struct ValuedCornerPoints<2U> {
+  itk::Vector<double, 4U> m_Values;
+};
+
+template <>
+struct ValuedCornerPoints<3U> {
+  itk::Vector<double, 8U> m_Values;
+};
+
+template <typename Dim>
+struct CornerPoints;
+
+template <>
+struct CornerPoints<1U> {
+  itk::FixedArray<itk::Point<long long, 1U>, 2U> m_Points;
+};
+
+template <>
+struct CornerPoints<2U> {
+  itk::FixedArray<itk::Point<long long, 2U>, 4U> m_Points;
+};
+
+template <>
+struct CornerPoints<3U> {
+  itk::FixedArray<itk::Point<long long, 3U>, 8U> m_Points;
+};
+
+template <unsigned int ImageDimension>
+inline double InterpolateDistances(itk::Vector<double, ImageDimension> frac, ValuedCornerPoints<ImageDimension>& distanceValues, itk::Vector<double, ImageDimension>& grad);
+
+// Linear interpolation
+template <>
+inline double InterpolateDistances<1U>(itk::Vector<double, 1U> frac, ValuedCornerPoints<1U> distanceValues, itk::Vector<double, 1U>& grad) {
+  double xx = frac[0];
+  double ixx = 1.0 - xx;
+  grad[0] = distanceValues.m_Values[1] - distanceValues.m_Values[0];
+  return ixx * distanceValues.m_Values[0] + xx * distanceValues.m_Values[1];
+}
+
+// Bilinear interpolation
+template <>
+inline double InterpolateDistances<2U>(itk::Vector<double, 2U> frac, ValuedCornerPoints<2U> distanceValues, itk::Vector<double, 2U>& grad) {
+  double xx = frac[0];
+  double yy = frac[1];
+  double ixx = 1.0 - xx;
+  double iyy = 1.0 - yy;
+
   // 0
   // Order for 2d: [(0, 0), (0, 1), (1, 0), (1, 1)]
   // 
-  double step01 = distances[2] - distances[0];
-  double step02 = distances[3] - distances[1];
+  double v_00 = distanceValues.m_Values[0];
+  double v_01 = distanceValues.m_Values[1];
+  double v_10 = distanceValues.m_Values[2];
+  double v_11 = distanceValues.m_Values[3];
+
+  double step_10_00 = v_10 - v_00;
+  double step_11_01 = v_11 - v_01;
+  double step_10_00 = v_10 - v_00;
+  double step_11_01 = v_11 - v_01;
   
-  grad[0] = (1.0-frac[1]) * step11 + frac[1] * step12;
-  grad[1] = (1.0-frac[0]) * step01 + frac[0] * step02;
+  grad[0] = iyy * step_10_00 + yy * step_11_01;
+  grad[1] = ixx * step_01_00 + xx * step_11_10;
+  return v_00 * ixx * iyy + v_10 * xx * iyy + v_01 * ixx * yy + v_11 * xx * yy;
+}
 
-  
-  w0 = (1.0 - frac[0]) * (1.0 - frac[1]);
-  w1 = (1.0 - frac[0]) * frac[1];
-  w2 = frac[0] * (1.0 - frac[1]);
-  w3 = frac[0] * frac[1];
+// Trilinear interpolation
+template <>
+inline double InterpolateDistances<3U>(itk::Vector<double, 3U> frac, ValuedCornerPoints<3U> distanceValues, itk::Vector<double, 3U>& grad) {
+  double xx = frac[0];
+  double yy = frac[1];
+  double zz = frac[2];
+  double ixx = 1.0 - xx;
+  double iyy = 1.0 - yy;
+  double izz = 1.0 - zz;
 
-  double d = (frac[0]*(1.0 - frac[1]) * step01 + frac[0] * frac[1] * step02);
+  // 0
+  // Order for 3d: [(0, 0, 0), (0, 0, 1), (0, 1, 0), (0, 1, 1), (1, 0, 0), (1, 0, 1), (1, 1, 0), (1, 1, 1)]
+  // 
+  double v_000 = distanceValues.m_Values[0];
+  double v_001 = distanceValues.m_Values[1];
+  double v_010 = distanceValues.m_Values[2];
+  double v_011 = distanceValues.m_Values[3];
+  double v_100 = distanceValues.m_Values[4];
+  double v_101 = distanceValues.m_Values[5];
+  double v_110 = distanceValues.m_Values[6];
+  double v_111 = distanceValues.m_Values[7];
 
-  double step11 = distances[]
+  double v_00 = v_000 * ixx + v_100 * xx;
+  double v_01 = v_001 * ixx + v_101 * xx;
+  double v_10 = v_010 * ixx + v_110 * xx;
+  double v_11 = v_011 * ixx + v_111 * xx;
+
+  double v_0 = v_00 * iyy + v_10 * yy;
+  double v_1 = v_01 * iyy + v_11 * yy;
+
+  double v = v_0 * izz + v_1 * zz;
+
+  /*
+   v = v_0 * izz + v_1 * zz
+   =>
+   v = (v_00 * iyy + v_10 * yy) * izz +
+         (v_01 * iyy + v_11 * yy) * zz =
+   ((v_000 * ixx + v_100 * xx) * iyy + (v_010 * ixx + v_110 * xx) * yy) * izz +
+     ((v_001 * ixx + v_101 * xx) * iyy + (v_011 * ixx + v_111 * xx) * yy) * zz =
+
+   df/dx = ((-v_000 + v_100) * iyy + (-v_010 + v_110) * yy) * izz +
+     ((-v_001 + v_101) * iyy + (-v_011 + v_111) * yy) * zz =     
+  ((v_100 - v_000) * iyy + (v_110 - v_010) * yy) * izz + ((v_101 - v_001) * iyy + (v_111 - v_011) * yy) * zz
+
+   df/dy = -(v_000 * ixx + v_100 * xx) * izz + (v_010 * ixx + v_110 * xx) * izz +
+     -(v_001 * ixx + v_101 * xx) * zz + (v_011 * ixx + v_111 * xx) * zz =
+   ((v_010 - v_000) * ixx + (v_110 - v_100) * xx) * izz + ((v_011 - v_001) * ixx + (v_111 - v_101) * xx) * zz
+
+   df/dz = -((v_000 * ixx + v_100 * xx) * iyy + (v_010 * ixx + v_110 * xx) * yy) + 
+     ((v_001 * ixx + v_101 * xx) * iyy + (v_011 * ixx + v_111 * xx) * yy) =
+     ((v_001 - v_000) * ixx + (v_101 - v_100) * xx) * iyy + ((v_011 - v_010) * ixx + (v_111 - v_110) * xx) * yy
+
+  */
+
+
+  grad[0] = ((v_100 - v_000) * iyy + (v_110 - v_010) * yy) * izz + ((v_101 - v_001) * iyy + (v_111 - v_011) * yy) * zz;
+  grad[1] = ((v_010 - v_000) * ixx + (v_110 - v_100) * xx) * izz + ((v_011 - v_001) * ixx + (v_111 - v_101) * xx) * zz;
+  grad[2] = ((v_001 - v_000) * ixx + (v_101 - v_100) * xx) * iyy + ((v_011 - v_010) * ixx + (v_111 - v_110) * xx) * yy;
+  return v;
 }
 
 template <unsigned int ImageDimension>
@@ -169,13 +279,13 @@ private:
   void ComputeCorners(unsigned int cur, unsigned int dim, unsigned int &pos, IndexType index)
   {
     // Order for 2d: [(0, 0), (0, 1), (1, 0), (1, 1)]
-    if (cur == dim)
+    if (cur == 0)
     {
       m_Corners[pos++] = index;
     }
-    ComputeCorners(cur + 1, dim, pos, index);
+    ComputeCorners(cur - 1, dim, pos, index);
     index[cur] = 1;
-    ComputeCorners(cur + 1, dim, pos, index);
+    ComputeCorners(cur - 1, dim, pos, index);
   }
 
   void BuildTreeRec(unsigned int nodeIndex, IndexType index, SizeType sz, unsigned int depthCountDown)
