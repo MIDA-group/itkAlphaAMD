@@ -13,7 +13,10 @@
 #include "itkTimeProbesCollectorBase.h"
 #include "itkMemoryProbesCollectorBase.h"
 
+#include "itkVersion.h"
+#if ITK_VERSION_MAJOR >= 5
 #include "itkMultiThreaderBase.h"
+#endif
 
 #include "itkPNGImageIOFactory.h"
 #include "itkNiftiImageIOFactory.h"
@@ -344,7 +347,11 @@ class PWEvalDeformable
 
     static int MainFunc(int argc, char** argv) {
         // Threading
+#if ITK_VERSION_MAJOR >= 5
         itk::MultiThreaderBase::SetGlobalMaximumNumberOfThreads(1);
+#else
+        itk::MultiThreader::SetGlobalMaximumNumberOfThreads(1);
+#endif
         constexpr int threadCount = 32;
 
         RegisterIOFactories();
