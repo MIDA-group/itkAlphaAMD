@@ -8,11 +8,20 @@
 #include "itkMersenneTwisterRandomVariateGenerator.h"
 #include "bsplineFunctions.h"
 #include "itkNearestNeighborInterpolateImageFunction.h"
-//#include "itkBSplineInterpolationWeightFunction.h"
 #include "itkBSplineInterpolateImageFunction.h"
 
 #include "itkTimeProbesCollectorBase.h"
 #include "itkMemoryProbesCollectorBase.h"
+
+#include "itkMultiThreaderBase.h"
+
+#include "itkPNGImageIOFactory.h"
+#include "itkNiftiImageIOFactory.h"
+
+void RegisterIOFactories() {
+    itk::PNGImageIOFactory::RegisterOneFactory();
+    itk::NiftiImageIOFactory::RegisterOneFactory();
+}
 
 struct EvaluationConfig {
     unsigned int seed;
@@ -335,8 +344,10 @@ class PWEvalDeformable
 
     static int MainFunc(int argc, char** argv) {
         // Threading
-        itk::MultiThreader::SetGlobalMaximumNumberOfThreads(1);
+        itk::MultiThreaderBase::SetGlobalMaximumNumberOfThreads(1);
         constexpr int threadCount = 32;
+
+        RegisterIOFactories();
 
         itk::TimeProbesCollectorBase chronometer;
         itk::MemoryProbesCollectorBase memorymeter;

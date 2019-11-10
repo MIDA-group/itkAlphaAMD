@@ -92,7 +92,7 @@ class AlphaSMDObjectToObjectMetricDeformv4 : public ObjectToObjectMetricBaseTemp
 
 	// Methods
 
-	virtual void Initialize() throw(ExceptionObject) override
+	virtual void Initialize() override
 	{
 	}
 
