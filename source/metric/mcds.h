@@ -22,23 +22,60 @@ struct ValuedCornerPoints<3U> {
   itk::Vector<double, 8U> m_Values;
 };
 
-template <typename Dim>
+template <typename T, unsigned int Dim>
 struct CornerPoints;
 
-template <>
-struct CornerPoints<1U> {
-  itk::FixedArray<itk::Point<long long, 1U>, 2U> m_Points;
+template <typename T>
+struct CornerPoints<T, 1U> {
+  itk::FixedArray<itk::FixedArray<T, 1U>, 2U> m_Points;
 };
 
-template <>
-struct CornerPoints<2U> {
-  itk::FixedArray<itk::Point<long long, 2U>, 4U> m_Points;
+template <typename T>
+struct CornerPoints<T, 2U> {
+  itk::FixedArray<itk::FixedArray<T, 2U>, 4U> m_Points;
 };
 
-template <>
-struct CornerPoints<3U> {
-  itk::FixedArray<itk::Point<long long, 3U>, 8U> m_Points;
+template <typename T>
+struct CornerPoints<T, 3U> {
+  itk::FixedArray<itk::FixedArray<T, 3U>, 8U> m_Points;
 };
+
+template <typename T, unsigned int Dim>
+void ComputeCornersRec(unsigned int cur, unsigned int& pos, itk::FixedArray<T, Dim>& index, CornerPoints<T, Dim>& out) {
+  if(cur == 0) {
+    out.m_Points[pos++] = index;
+  } else {
+    ComputeCornersRec(cur-1, pos, index, out);
+    index[cur-1] = 1;
+    ComputeCornersRec(cur-1, pos, index, out);
+    index[cur-1] = 0;
+  }
+
+}
+
+template <typename T, unsigned int Dim>
+CornerPoints<T, Dim> ComputeCorners(unsigned int dim) {
+  CornerPoints<T, Dim> res;
+  itk::FixedArray<T, Dim> index;
+  index.Fill(0);
+  unsigned int pos = 0;
+  ComputeCornersRec(Dim, pos, index, res);
+  
+  return res;
+}
+
+  void ComputeCorners(unsigned int cur, unsigned int dim, unsigned int &pos, IndexType index)
+  {
+    // Order for 2d: [(0, 0), (0, 1), (1, 0), (1, 1)]
+    if (cur == 0)
+    {
+      m_Corners[pos++] = index;
+    } else {
+      ComputeCorners(cur - 1, dim, pos, index);
+      index[cur-1] = 1;
+      ComputeCorners(cur - 1, dim, pos, index);
+    }
+  }
 
 template <unsigned int ImageDimension>
 inline double InterpolateDistances(itk::Vector<double, ImageDimension> frac, ValuedCornerPoints<ImageDimension>& distanceValues, itk::Vector<double, ImageDimension>& grad);
@@ -282,10 +319,11 @@ private:
     if (cur == 0)
     {
       m_Corners[pos++] = index;
+    } else {
+      ComputeCorners(cur - 1, dim, pos, index);
+      index[cur-1] = 1;
+      ComputeCorners(cur - 1, dim, pos, index);
     }
-    ComputeCorners(cur - 1, dim, pos, index);
-    index[cur] = 1;
-    ComputeCorners(cur - 1, dim, pos, index);
   }
 
   void BuildTreeRec(unsigned int nodeIndex, IndexType index, SizeType sz, unsigned int depthCountDown)
