@@ -386,14 +386,15 @@ class PWEvalDeformable
 
         assert(config.thread <= threadCount);
         assert(config.endIndex >= config.startIndex);
+
         unsigned int count = config.endIndex - config.startIndex;
 
         for(unsigned int i = 0; i < config.threads; ++i) {
             double spn = count/(double)config.threads;
             unsigned int start = config.startIndex + (int)(i * spn);
             unsigned int end = config.startIndex + (int)((i+1) * spn);
-            if(end > count)
-                end = count;
+            if(end > config.startIndex+count)
+                end = config.startIndex+count;
             std::cout << "(" << start << " - " << end << ")" << std::endl;
             threadData[i].startIndex = start;
             threadData[i].endIndex = end;
