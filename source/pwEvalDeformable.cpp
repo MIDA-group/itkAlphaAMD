@@ -15,12 +15,12 @@
 #include "itkMemoryProbesCollectorBase.h"
 
 struct EvaluationConfig {
-    unsigned int count;
     unsigned int seed;
-    std::string metricName;
+    unsigned int threads;
     std::vector<std::string> images;
     std::vector<std::string> labels;
-    std::string methodConfigPath;
+    unsigned int startIndex;
+    unsigned int endIndex;
 };
 
 EvaluationConfig readEvaluationConfig(std::string path) {
@@ -28,23 +28,31 @@ EvaluationConfig readEvaluationConfig(std::string path) {
 
     EvaluationConfig c;
 
-    c.count = (unsigned int)jc["count"];
-    c.metricName = jc["metric"];
+    c.threads = (unsigned int)jc["threads"];
+    c.startIndex = (unsigned int)jc["startIndex"];
+    c.endIndex = (unsigned int)jc["endIndex"];
     for(unsigned int i = 0; i< jc["images"].size(); ++i)
         c.images.push_back(jc["images"][i]);
     for(unsigned int i = 0; i< jc["labels"].size(); ++i)
         c.labels.push_back(jc["labels"][i]);
 
-    c.methodConfigPath = jc["methodConfigPath"];
-
     return c;
 }
 
 struct PerformanceMetrics {
+    unsigned int refIndex;
+    unsigned int floIndex;
     double totalOverlap;
     double meanTotalOverlap;
     double absDiff;
 };
+
+PerformanceMetrics MakePerformanceMetrics(unsigned int refIndex, unsigned int floIndex) {
+    PerformanceMetrics pm;
+    pm.refIndex = refIndex;
+    pm.floIndex = floIndex;
+    return pm;
+}
 
 struct EvalThread {
     std::vector<PerformanceMetrics> beforePerf;
@@ -60,80 +68,28 @@ void printMetrics(PerformanceMetrics m, std::string name, bool linebreak=true) {
         std::cout << std::endl;
 }
 
-/*PerformanceMetrics meanMetrics(std::vector<PerformanceMetrics>& m) {
-    PerformanceMetrics acc;
-    acc.accuracy = 0.0;
-    acc.hausdorff = 0.0;
-    acc.absDiff = 0.0;
-
-    for(size_t i = 0; i < m.size(); ++i) {
-        acc.accuracy += m[i].accuracy / m.size();
-        acc.hausdorff += m[i].hausdorff / m.size();
-        acc.absDiff += m[i].absDiff / m.size();
-    }
-
-    return acc;
-}
-
-PerformanceMetrics sdMetrics(std::vector<PerformanceMetrics>& m) {
-    PerformanceMetrics mn = meanMetrics(m);
-
-    PerformanceMetrics acc;
-    acc.accuracy = 0.0;
-    acc.hausdorff = 0.0;
-    acc.absDiff = 0.0;
-
-    for(size_t i = 0; i < m.size(); ++i) {
-        acc.accuracy += pow(m[i].accuracy-mn.accuracy, 2.0);
-        acc.hausdorff += pow(m[i].hausdorff-mn.hausdorff, 2.0);
-        acc.absDiff += pow(m[i].absDiff-mn.absDiff, 2.0);
-    }
-
-    acc.accuracy = sqrt(acc.accuracy / (m.size()-1));
-    acc.hausdorff = sqrt(acc.hausdorff / (m.size()-1));
-    acc.absDiff = sqrt(acc.absDiff / (m.size()-1));
-
-    return acc;
-}
-
-PerformanceMetrics minMetrics(std::vector<PerformanceMetrics>& m) {
-    PerformanceMetrics acc;
-    acc.accuracy = m[0].accuracy;
-    acc.hausdorff = m[0].hausdorff;
-    acc.absDiff = m[0].absDiff;
-
-    for(size_t i = 1; i < m.size(); ++i) {
-        if(acc.accuracy > m[i].accuracy)
-            acc.accuracy = m[i].accuracy;
-        if(acc.hausdorff > m[i].hausdorff)
-            acc.hausdorff = m[i].hausdorff;
-        if(acc.absDiff > m[i].absDiff)
-            acc.absDiff = m[i].absDiff;
-    }
-
-    return acc;
-}
-
-PerformanceMetrics maxMetrics(std::vector<PerformanceMetrics>& m) {
-    PerformanceMetrics acc;
-    acc.accuracy = 0.0;
-    acc.hausdorff = 0.0;
-    acc.absDiff = 0.0;
-
-    for(size_t i = 0; i < m.size(); ++i) {
-        if(acc.accuracy < m[i].accuracy)
-            acc.accuracy = m[i].accuracy;
-        if(acc.hausdorff < m[i].hausdorff)
-            acc.hausdorff = m[i].hausdorff;
-        if(acc.absDiff < m[i].absDiff)
-            acc.absDiff = m[i].absDiff;
-    }
-
-    return acc;
-}*/
-
 void SaveMetrics(const char* path, const std::vector<PerformanceMetrics>& m) {
     FILE *f = fopen(path, "wb");
+
+    // Write refIndex
+    for (size_t i = 0; i < m.size(); ++i)
+    {
+        if (i > 0)
+            fprintf(f, ",");
+
+        fprintf(f, "%d", m[i].refIndex);
+    }
+    fprintf(f, "\n");
+
+    // Write floIndex
+    for (size_t i = 0; i < m.size(); ++i)
+    {
+        if (i > 0)
+            fprintf(f, ",");
+
+        fprintf(f, "%d", m[i].floIndex);
+    }
+    fprintf(f, "\n");
 
     // Write totalOverlap
     for (size_t i = 0; i < m.size(); ++i)
@@ -183,7 +139,6 @@ class PWEvalDeformable
     typedef typename MaskType::Pointer MaskPointer;
 
     typedef BSplines<ImageDimension> BSplineFunc;
-
 
     static ImagePointer Chessboard(ImagePointer image1, ImagePointer image2, int cells)
     {
@@ -245,6 +200,12 @@ class PWEvalDeformable
         return resample->GetOutput();
     }
 
+    static double MeanAbsDifference(ImagePointer image1, ImagePointer image2) {
+        ImagePointer diffImage = IPT::DifferenceImage(image1, image2);
+        typename IPT::ImageStatisticsData stats = IPT::ImageStatistics(diffImage);
+        return stats.mean;
+    }
+
     template <typename TImageType>
     static void LabelAccuracy(typename TImageType::Pointer image1, typename TImageType::Pointer image2, double& totalOverlap, double& meanTotalOverlap) {
         typedef itk::LabelOverlapMeasuresImageFilter<TImageType> FilterType;
@@ -289,7 +250,6 @@ class PWEvalDeformable
         std::vector<unsigned int>& refIndices,
         std::vector<unsigned int>& floIndices,
         BSplineRegParamOuter& params,
-        unsigned int metricID,
         EvalThread& t)
     {
 
@@ -307,74 +267,77 @@ class PWEvalDeformable
 
             ImagePointer refImage = IPT::LoadImage(images[refIndex].c_str());
             ImagePointer floImage = IPT::LoadImage(images[floIndex].c_str());
-            LabelImagePointer refImageLabel = IPT::LoadLabelImage(labels[refIndex].c_str());
-            LabelImagePointer floImageLabel = IPT::LoadLabelImage(labels[floIndex].c_str());
 
             ImagePointer refImageMask = IPT::ConstantImage(1.0, refImage->GetLargestPossibleRegion().GetSize());
             ImagePointer floImageMask = IPT::ConstantImage(1.0, floImage->GetLargestPossibleRegion().GetSize());
 
-            ImagePointer cbImage = BlackAndWhiteChessboard(refImage, 32);
-
             TransformPointer forwardTransform;
             TransformPointer inverseTransform;
 
-            bool verbose = true;
-            if(metricID == 0) {
-                bsf.bspline_register(refImage, floImage, params, refImageMask, floImageMask, verbose, forwardTransform, inverseTransform);
-            } else {
-                bsf.bspline_register_baseline(refImage, floImage, params, refImageMask, floImageMask, verbose, forwardTransform, inverseTransform, metricID-1);
-            }
+            bsf.bspline_register(refImage, floImage, params, refImageMask, floImageMask, true, forwardTransform, inverseTransform);
 
-            ImagePointer registeredImage = ApplyTransform<ImageType, TransformType>(refImage, floImage, forwardTransform, 1, 0.0);
-            LabelImagePointer registeredLabel = ApplyTransform<LabelImageType, TransformType>(refImageLabel, floImageLabel, forwardTransform, 0, 0);
+            // Remove the mask images
+            refImageMask = 0;
+            floImageMask = 0;
 
-            PerformanceMetrics beforePM;
-            PerformanceMetrics afterPM;
+            char fwdTransformPath[512];
+            sprintf(fwdTransformPath, "./transforms/t%d_%d.txt", refIndex, floIndex);
+            char revTransformPath[512];
+            sprintf(revTransformPath, "./transforms/t%d_%d.txt", floIndex, refIndex);
+            IPT::SaveTransformFile(fwdTransformPath, forwardTransform.GetPointer());
+            IPT::SaveTransformFile(revTransformPath, inverseTransform.GetPointer());
 
-            typename ImageType::Pointer beforeDiff = IPT::DifferenceImage(refImage, floImage);
+            // Load the label images
+            LabelImagePointer refImageLabel = IPT::LoadLabelImage(labels[refIndex].c_str());
+            LabelImagePointer floImageLabel = IPT::LoadLabelImage(labels[floIndex].c_str());
 
-            typename IPT::ImageStatisticsData beforeStats = IPT::ImageStatistics(beforeDiff);
-            beforePM.absDiff = beforeStats.mean;
+            // Apply transformations to intensity images and to labels
+            ImagePointer floToRefRegisteredImage = ApplyTransform<ImageType, TransformType>(refImage, floImage, forwardTransform, 1, 0.0);
+            ImagePointer refToFloRegisteredImage = ApplyTransform<ImageType, TransformType>(floImage, refImage, inverseTransform, 1, 0.0);
+            LabelImagePointer floToRefRegisteredLabel = ApplyTransform<LabelImageType, TransformType>(refImageLabel, floImageLabel, forwardTransform, 0, 0);
+            LabelImagePointer refToFloRegisteredLabel = ApplyTransform<LabelImageType, TransformType>(floImageLabel, refImageLabel, inverseTransform, 0, 0);
 
-            double totalOverlap;
-            double meanTotalOverlap;
-            LabelAccuracy<LabelImageType>(floImageLabel, refImageLabel, totalOverlap, meanTotalOverlap);
-            beforePM.totalOverlap = totalOverlap;
-            beforePM.meanTotalOverlap = meanTotalOverlap;
-            //beforePM.totalOverlap = LabelAccuracy<LabelImageType>(floImageLabel, refImageLabel);
+            // Initialize performance metrics structures
+            PerformanceMetrics beforeFwdPM = MakePerformanceMetrics(refIndex, floIndex);
+            PerformanceMetrics afterFwdPM = MakePerformanceMetrics(refIndex, floIndex);
+            PerformanceMetrics beforeRevPM = MakePerformanceMetrics(floIndex, refIndex);
+            PerformanceMetrics afterRevPM = MakePerformanceMetrics(floIndex, refIndex);
 
-            typename ImageType::Pointer afterDiff = IPT::DifferenceImage(refImage, registeredImage);
+            // Compute the before mean absolute difference
+            beforeFwdPM.absDiff = MeanAbsDifference(refImage, floImage);
+            beforeRevPM.absDiff = beforeFwdPM.absDiff;
 
-            typename IPT::ImageStatisticsData afterStats = IPT::ImageStatistics(afterDiff);
-            afterPM.absDiff = afterStats.mean;
+            LabelAccuracy<LabelImageType>(floImageLabel, refImageLabel, beforeFwdPM.totalOverlap, beforeFwdPM.meanTotalOverlap);
+            LabelAccuracy<LabelImageType>(refImageLabel, floImageLabel, beforeRevPM.totalOverlap, beforeRevPM.meanTotalOverlap);
 
-            //afterPM.accuracy = LabelAccuracy<LabelImageType>(registeredLabel, refImageLabel);
-            LabelAccuracy<LabelImageType>(registeredLabel, refImageLabel, totalOverlap, meanTotalOverlap);
-            afterPM.totalOverlap = totalOverlap;
-            afterPM.meanTotalOverlap = meanTotalOverlap;
+            afterFwdPM.absDiff = MeanAbsDifference(refImage, floToRefRegisteredImage);
+            afterRevPM.absDiff = MeanAbsDifference(floImage, refToFloRegisteredImage);
 
-            t.beforePerf.push_back(beforePM);
-            t.afterPerf.push_back(afterPM);
+            LabelAccuracy<LabelImageType>(floToRefRegisteredLabel, refImageLabel, afterFwdPM.totalOverlap, afterFwdPM.meanTotalOverlap);
+            LabelAccuracy<LabelImageType>(refToFloRegisteredLabel, floImageLabel, afterRevPM.totalOverlap, afterRevPM.meanTotalOverlap);
 
-            printMetrics(beforePM, "[Before]");
-            printMetrics(afterPM, "[After]");
+            t.beforePerf.push_back(beforeFwdPM);
+            t.afterPerf.push_back(afterFwdPM);
+            t.beforePerf.push_back(beforeRevPM);
+            t.afterPerf.push_back(afterFwdPM);
 
-            std::string prefix = "./results/synth";
-            prefix += ('0' + metricID);
-            
-            if(i == 0) {
-                ImagePointer transformedCBImage = ApplyTransform<ImageType, TransformType>(refImage, cbImage, forwardTransform, 1, 0.0);
-                
-                //IPT::SaveImageU16(prefix + "_registered.nii.gz", registeredImage);
-                IPT::SaveImageU16(prefix + "_chessboard_registered.nii.gz", transformedCBImage);
-                IPT::SaveLabelImage(prefix + "_label_registered.nii.gz", registeredLabel);
-            }
+            char str[512];
+            sprintf(str, "R%dF%d: [Before]", refIndex, floIndex);
+            printMetrics(beforeFwdPM, str);
+            sprintf(str, "R%dF%d: [After]", refIndex, floIndex);
+            printMetrics(afterFwdPM, str);
+            sprintf(str, "R%dF%d: [Before]", floIndex, refIndex);
+            printMetrics(beforeRevPM, str);
+            sprintf(str, "R%dF%d: [After]", floIndex, refIndex);
+            printMetrics(afterRevPM, str);
         }
     }
 
     static int MainFunc(int argc, char** argv) {
+        // Threading
         itk::MultiThreader::SetGlobalMaximumNumberOfThreads(1);
-        
+        constexpr int threadCount = 32;
+
         itk::TimeProbesCollectorBase chronometer;
         itk::MemoryProbesCollectorBase memorymeter;
 
@@ -383,61 +346,34 @@ class PWEvalDeformable
 
         EvaluationConfig config = readEvaluationConfig(argv[2]);
         std::cout << "Evaluation config read..." << std::endl;
-        BSplineRegParamOuter params = readConfig(config.methodConfigPath);
+        BSplineRegParamOuter params = readConfig(argv[3]);
         std::cout << "Registration config read..." << std::endl;
 
         std::vector<unsigned int> refIndices;
         std::vector<unsigned int> floIndices;
 
         for(unsigned int i = 0; i < config.images.size(); ++i) {
-            for(unsigned int j = 0; j < config.images.size(); ++j) {
-                if(i == j)
-                    continue;
+            for(unsigned int j = i+1; j < config.images.size(); ++j) {
                 refIndices.push_back(i);
                 floIndices.push_back(j);
             }
         }
-        if(config.count == 0) {
-            config.count = (unsigned int)refIndices.size();
-        }
-
-        unsigned int count = config.count;
 
         BSplineFunc bspline_func;
 
-        unsigned int metricID = 0;
-        if(config.metricName=="alpha-amd")
-            metricID = 0;
-        else if(config.metricName == "msd")
-            metricID = 1;
-        else if(config.metricName == "mi")
-            metricID = 2;
-        else {
-            std::cout << "Unreconized metric name: alpha-amd or msd supported." << std::endl;
-            return -1;
-        }
-
-        constexpr int threadCount = 6;
-
-            std::vector<PerformanceMetrics> beforePerf;
-            std::vector<PerformanceMetrics> afterPerf;
+        std::vector<PerformanceMetrics> beforePerf;
+        std::vector<PerformanceMetrics> afterPerf;
         EvalThread threadData[threadCount];
         std::thread threads[threadCount];
-/*
-    static void Evaluate(
-        const std::vector<std::string>& images,
-        const std::vector<std::string>& labels,
-        std::vector<unsigned int>& refIndices,
-        std::vector<unsigned int>& floIndices,
-        BSplineRegParamOuter& params,
-        unsigned int metricID,
-        EvalThread& t)
-    {*/
 
-        for(unsigned int i = 0; i < threadCount; ++i) {
-            double spn = count/(double)threadCount;
-            unsigned int start = (int)(i * spn);
-            unsigned int end = (int)((i+1) * spn);
+        assert(config.thread <= threadCount);
+        assert(config.endIndex >= config.startIndex);
+        unsigned int count = config.endIndex - config.startIndex;
+
+        for(unsigned int i = 0; i < config.threads; ++i) {
+            double spn = count/(double)config.threads;
+            unsigned int start = config.startIndex + (int)(i * spn);
+            unsigned int end = config.startIndex + (int)((i+1) * spn);
             if(end > count)
                 end = count;
             std::cout << "(" << start << " - " << end << ")" << std::endl;
@@ -446,11 +382,11 @@ class PWEvalDeformable
 
             threadData[i].threadID = i;
 
-            auto fn = [&, i]() -> void { Evaluate(config.images, config.labels, refIndices, floIndices, params, metricID, threadData[i]); };
+            auto fn = [&, i]() -> void { Evaluate(config.images, config.labels, refIndices, floIndices, params, threadData[i]); };
             threads[i] = std::thread(fn);
         }
 
-        for(unsigned int i = 0; i < threadCount; ++i) {
+        for(unsigned int i = 0; i < config.threads; ++i) {
             threads[i].join();
             for(size_t j = 0; j < threadData[i].beforePerf.size(); ++j) {
                 beforePerf.push_back(threadData[i].beforePerf[j]);
@@ -464,8 +400,11 @@ class PWEvalDeformable
         chronometer.Report(std::cout);
         memorymeter.Report(std::cout);
 
-        SaveMetrics("before_metrics.csv", beforePerf);
-        SaveMetrics("after_metrics.csv", afterPerf);
+        char str[512];
+        sprintf(str, "before_metrics_%d_%d.csv", config.startIndex, config.endIndex);
+        SaveMetrics(str, beforePerf);
+        sprintf(str, "after_metrics_%d_%d.csv", config.startIndex, config.endIndex);
+        SaveMetrics(str, afterPerf);
 
         return 0;
     }

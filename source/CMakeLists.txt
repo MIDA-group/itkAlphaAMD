@@ -39,6 +39,8 @@ add_executable(SynthEvalDeformableND synthEvalDeformableND.cpp)
 
 add_executable(PWEvalDeformableND pwEvalDeformableND.cpp)
 
+add_executable(ABSReg absReg.cpp)
+
 target_link_libraries(ACRandomTransforms ${ITK_LIBRARIES})
 
 target_link_libraries(ACRegister ${ITK_LIBRARIES})
@@ -60,3 +62,5 @@ target_link_libraries(RegisterBSpline3D ${ITK_LIBRARIES})
 target_link_libraries(SynthEvalDeformableND ${ITK_LIBRARIES})
 
 target_link_libraries(PWEvalDeformableND ${ITK_LIBRARIES})
+
+target_link_libraries(ABSReg ${ITK_LIBRARIES})

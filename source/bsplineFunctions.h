@@ -57,6 +57,8 @@
 
 struct BSplineRegParamInner {
     double learningRate;
+    double samplingFraction;
+    double momentum;
     double lambdaFactor;
     long long iterations;
     long long controlPoints;
@@ -73,6 +75,7 @@ struct BSplineRegParam
     bool gradientMagnitude;
     double normalization;
     double learningRate;
+    double momentum;
     double lambdaFactor;
     unsigned long long seed;
     std::string samplingMode;
@@ -119,7 +122,7 @@ BSplineRegParamOuter readConfig(std::string path) {
         //    paramSet.samplingFraction = 0.05;
 
         //std::cout << "Access samplingFraction" << std::endl;
-        paramSet.optimizer = "adam";
+        paramSet.optimizer = "sgdm";
         readJSONKey(m_i, "optimizer", &paramSet.optimizer);
         paramSet.downsamplingFactor = 1;
         readJSONKey(m_i, "downsamplingFactor", &paramSet.downsamplingFactor);
@@ -133,6 +136,8 @@ BSplineRegParamOuter readConfig(std::string path) {
         readJSONKey(m_i, "normalization", &paramSet.normalization);
         paramSet.learningRate = 0.1;
         readJSONKey(m_i, "learningRate", &paramSet.learningRate);
+        paramSet.momentum = 0.1;
+        readJSONKey(m_i, "momentum", &paramSet.momentum);
         paramSet.lambdaFactor = 0.01;
         readJSONKey(m_i, "lambdaFactor", &paramSet.lambdaFactor);
         paramSet.samplingMode = "quasi";
@@ -150,6 +155,10 @@ BSplineRegParamOuter readConfig(std::string path) {
            
             innerParam.learningRate = paramSet.learningRate;
             readJSONKey(m_i_j, "learningRate", &innerParam.learningRate);
+            innerParam.samplingFraction = paramSet.samplingFraction;
+            readJSONKey(m_i_j, "samplingFraction", &innerParam.samplingFraction);
+            innerParam.momentum = paramSet.momentum;
+            readJSONKey(m_i_j, "momentum", &innerParam.momentum);
             innerParam.lambdaFactor = paramSet.lambdaFactor;
             readJSONKey(m_i_j, "lambdaFactor", &innerParam.lambdaFactor);
             innerParam.iterations = 500;
@@ -570,6 +579,35 @@ void adam_optimizer(MetricType* metric, double learningRate, unsigned int iterat
     }
 }
 
+void sgdm(MetricType* metric, double learningRate, double momentum, unsigned int iterations) {
+    
+    typedef typename MetricType::DerivativeType DerivativeType;
+
+    unsigned int N = metric->GetNumberOfParameters();
+
+    DerivativeType d(N);
+    DerivativeType dcur(N);
+
+    d.Fill(0.0);
+    dcur.Fill(0.0);
+
+    for(unsigned int i = 0; i < iterations; ++i) {
+        double value;
+        metric->GetValueAndDerivative(value, d);
+
+        for(unsigned int j = 0; j < N; ++j) {
+	  double d_j = momentum * dcur[j] + (1.0 - momentum) * d[j];
+          if(fabs(d_j) < 1e-15) {
+            dcur[j] = 0.0;
+          } else {
+            dcur[j] = d_j;
+          }
+        }
+
+        metric->UpdateTransformParameters(dcur, learningRate);
+    }
+}
+
 void register_func(typename ImageType::Pointer fixedImage, typename ImageType::Pointer movingImage, TransformPointer& transformForward, TransformPointer& transformInverse, BSplineRegParam param, ImagePointer fixedMask, ImagePointer movingMask, bool verbose=false)
 {
     typedef itk::IPT<double, ImageDimension> IPT;
@@ -585,9 +623,6 @@ void register_func(typename ImageType::Pointer fixedImage, typename ImageType::P
 
     metric->SetForwardTransformPointer(transformForward);
     metric->SetInverseTransformPointer(transformInverse);
-
-    metric->SetFixedSamplingPercentage(param.samplingFraction);
-    metric->SetMovingSamplingPercentage(param.samplingFraction);
 
     if(param.samplingMode == "quasi") {
         metric->SetUseQuasiRandomSampling(true);
@@ -625,15 +660,15 @@ void register_func(typename ImageType::Pointer fixedImage, typename ImageType::P
 
     typedef itk::IPT<double, ImageDimension> IPT;
     
-    metric->SetFixedSamplingPercentage(param.samplingFraction);
-    metric->SetMovingSamplingPercentage(param.samplingFraction);
-
     for (int q = 0; q < param.innerParams.size(); ++q) {
         double lr1 = param.innerParams[q].learningRate;
         unsigned int iterations = param.innerParams[q].iterations;
         unsigned int controlPoints = param.innerParams[q].controlPoints;
 
         metric->SetSymmetryLambda(param.innerParams[q].lambdaFactor);
+
+        metric->SetFixedSamplingPercentage(param.innerParams[q].samplingFraction);
+        metric->SetMovingSamplingPercentage(param.innerParams[q].samplingFraction);
 
         if(q > 0) {
             TransformPointer tforNew = CreateBSplineTransform(fixedImage, controlPoints);
@@ -655,6 +690,8 @@ void register_func(typename ImageType::Pointer fixedImage, typename ImageType::P
 
     if(param.optimizer == "adam") {
         adam_optimizer(metric.GetPointer(), lr1, iterations);
+    } else if(param.optimizer == "sgdm") {
+      sgdm(metric.GetPointer(), lr1, param.momentum, iterations);
     } else if(param.optimizer == "sgd") {
         typedef itk::RegularStepGradientDescentOptimizerv4<double> OptimizerType;
         typename OptimizerType::Pointer optimizer = OptimizerType::New();
@@ -681,13 +718,22 @@ void register_func(typename ImageType::Pointer fixedImage, typename ImageType::P
     typename MetricType::ParametersType parameters(metric->GetParameters());
     double absVal = 0.0;
     double val = 0.0;
-    for(unsigned int j = 0; j < metric->GetNumberOfParameters(); ++j) {
-        if(fabs(parameters[j]) > absVal) {
-            absVal = fabs(parameters[j]);
+    double absAcc = 0.0;
+    double absAccSq = 0.0;
+    unsigned int N = metric->GetNumberOfParameters();
+    for(unsigned int j = 0; j < N; ++j) {
+        double absparam = fabs(parameters[j]);
+        if(absparam > absVal) {
+            absVal = absparam;
             val = parameters[j];
         }
+        absAcc += absparam;
+        absAccSq += absparam*absparam;
     }
-    std::cout << "Largest parameters: " << absVal << std::endl;
+    absAcc /= N;
+    absAccSq /= N;
+
+    std::cout << "Max: " << absVal << ", Mean: " << (absAcc / N) << ", Sd: " << (absAccSq-absAcc*absAcc) << std::endl;
 
     }
 

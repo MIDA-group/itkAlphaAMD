@@ -1,0 +1,8 @@
+
+#include <itkImage.h>
+
+template <typename ValueType, unsigned int ImageDimension>
+class MCDS {
+public:
+  typedef 
+};
