@@ -63,7 +63,7 @@ CornerPoints<T, Dim> ComputeCorners(unsigned int dim) {
   
   return res;
 }
-
+/*
   void ComputeCorners(unsigned int cur, unsigned int dim, unsigned int &pos, IndexType index)
   {
     // Order for 2d: [(0, 0), (0, 1), (1, 0), (1, 1)]
@@ -76,7 +76,7 @@ CornerPoints<T, Dim> ComputeCorners(unsigned int dim) {
       ComputeCorners(cur - 1, dim, pos, index);
     }
   }
-
+*/
 template <unsigned int ImageDimension>
 inline double InterpolateDistances(itk::Vector<double, ImageDimension> frac, ValuedCornerPoints<ImageDimension>& distanceValues, itk::Vector<double, ImageDimension>& grad);
 
@@ -209,15 +209,17 @@ inline double LowerBoundDistance(IndexType pnt, IndexType rectOrigin, SizeType r
   double d = 0;
   for (unsigned int i = 0; i < ImageDimension; ++i)
   {
+    unsigned int lowEdgePos_i = rectOrigin[i] - 1;
+    unsigned int highEdgePos_i = rectOrigin[i] + rectSz[i] + 1;
     // If outside:
-    if (pnt[i] + 1 < rectOrigin[i])
+    if (pnt[i] < lowEdgePos_i)
     {
-      double d_i = (double)(rectOrigin[i] - pnt[i] - 1) * sp[i];
+      double d_i = (double)(lowEdgePos_i - pnt[i]) * sp[i];
       d += d_i * d_i;
     }
-    if (rectOrigin[i] + rectSz[i] + 1 < pnt[i])
+    else if (highEdgePos_i < pnt[i])
     {
-      double d_i = (double)(pnt[i] - rectOrigin[i] - 1) * sp[i];
+      double d_i = (double)(pnt[i] - highEdgePos_i) * sp[i];
       d += d_i * d_i;
     }
   }
@@ -309,8 +311,10 @@ private:
     IndexType m_Index;
     SizeType m_Size;
     unsigned int m_NodeIndex;
-    unsigned int m_InwardsOffset;
-    unsigned int m_ComplementOffset;
+    unsigned int m_InStart;
+    unsigned int m_InEnd;
+    unsigned int m_CoStart;
+    unsigned int m_CoEnd;
   };
 
   void ComputeCorners(unsigned int cur, unsigned int dim, unsigned int &pos, IndexType index)
@@ -408,8 +412,10 @@ private:
     stackNodes[0].m_Index = region.GetIndex();
     stackNodes[0].m_Size = region.GetSize();
     stackNodes[0].m_NodeIndex = 1;
-    stackNodes[0].m_InwardsOffset = inwardsCount;
-    stackNodes[0].m_ComplementOffset = complementCount;
+    stackNodes[0].m_InStart = 0;
+    stackNodes[0].m_InEnd = inwardsCount;
+    stackNodes[0].m_CoStart = inwardsCount;
+    stackNodes[0].m_CoEnd = inwardsCount + complementCount;
 
     while (stackIndex > 0)
     {
@@ -422,21 +428,24 @@ private:
         continue;
       }
 
-      int inwardsOffsetLocal = stackNodes[stackIndex].m_InwardsOffset[stackIndex];
-      int complementOffsetLocal = stackNodes[stackIndex].m_ComplementOffset[stackIndex];
+      unsigned int inStartLocal = stackNodes[stackIndex].m_InStart;
+      unsigned int inEndLocal = stackNodes[stackIndex].m_InEnd;
+      unsigned int coStartLocal = stackNodes[stackIndex].m_CoStart;
+      unsigned int coEndLocal = stackNodes[stackIndex].m_CoEnd;
+
       unsigned int nodeIndex = stackNodes[stackIndex].m_NodeIndex;
       NodeValueType nv = m_Array[nodeIndex];
 
       // Eliminate inwards values
-      for (; inwardsOffsetLocal > 0; --inwardsOffsetLocal)
+      for (; inStartLocal < inEndLocal; --inEndLocal)
       {
-        if (inwardsValues[inwardsOffsetLocal - 1] <= nv[0])
+        if (inwardsValues[inEndLocal - 1] <= nv[0])
           break;
       }
       // Eliminate complement values
-      for (; complementOffsetLocal > 0; --complementOffsetLocal)
+      for (; coStartLocal < coEndLocal; --coEndLocal)
       {
-        if (complementValues[complementOffsetLocal - 1] <= nv[1])
+        if (complementValues[coEndLocal - 1] <= nv[1])
           break;
       }
 
@@ -462,22 +471,24 @@ private:
 
           // Compare d with all the distances recorded for the alpha levels still in play
 
-          for (unsigned int j = 0; j < inwardsOffsetLocal; ++j)
+          for (unsigned int j = inStartLocal; j < inEndLocal; ++j)
           {
             double cur_j = m_Table.GetElement(j, i);
-            // Note - there may be an optimization possible here due to sorted alpha levels...
             if (d < cur_j)
             {
               m_Table.SetElement(j, i, d);
+            } else {
+              break;
             }
           }
-          for (unsigned int j = 0; j < complementOffsetLocal; ++j)
+          for (unsigned int j = coStartLocal; j < coEndLocal; ++j)
           {
-            double cur_j = m_Table.GetElement(j + inwardsCount, i);
-            // Note - there may be an optimization possible here due to sorted alpha levels...
+            double cur_j = m_Table.GetElement(j, i);
             if (d < cur_j)
             {
               m_Table.SetElement(j, i, d);
+            } else {
+              break;
             }
           }
         }
@@ -490,22 +501,22 @@ private:
         double lowerBoundDistance = LowerBoundDistance<IndexType, SizeType, dim>(index, innerNodeInd, innerNodeSz, spacing);
 
         // Eliminate inwards values based on distance bounds
-        for (; inwardsOffsetLocal > 0; --inwardsOffsetLocal)
+        for (; inStartLocal < inEndLocal; ++inStartLocal)
         {
-          double cur_j = m_Table.GetElement(inwardsOffsetLocal - 1, 0);
+          double cur_j = m_Table.GetElement(inStartLocal, 0);
           if (lowerBoundDistance < cur_j)
             break;
         }
         // Eliminate complement values based on distance bounds
-        for (; complementOffsetLocal > 0; --complementOffsetLocal)
+        for (; coStartLocal < coEndLocal; ++coStartLocal)
         {
-          double cur_j = m_Table.GetElement(complementOffsetLocal + inwardsCount - 1, 0);
+          double cur_j = m_Table.GetElement(coStartLocal, 0);
           if (lowerBoundDistance < cur_j)
             break;
         }
 
         // If all alpha levels are eliminated, backtrack...
-        if (inwardsOffsetLocal + complementOffsetLocal == 0U)
+        if (inStartLocal == inEndLocal && coStartLocal == coEndLocal)
         {
           continue;
         }
@@ -529,14 +540,18 @@ private:
           stackNodes[stackIndex].m_Index = midIndex;
           stackNodes[stackIndex].m_Size = sz2;
           stackNodes[stackIndex].m_NodeIndex = nodeIndex2;
-          stackNodes[stackIndex].m_InwardsOffset = inwardsOffsetLocal;
-          stackNodes[stackIndex].m_ComplementOffset = complementOffsetLocal;
+          stackNodes[stackIndex].m_InStart = inStartLocal;
+          stackNodes[stackIndex].m_InEnd = inStartLocal;
+          stackNodes[stackIndex].m_CoStart = coEndLocal;
+          stackNodes[stackIndex].m_CoEnd = coEndLocal;
           ++stackIndex;
           stackNodes[stackIndex].m_Index = index;
           stackNodes[stackIndex].m_Size = sz1;
           stackNodes[stackIndex].m_NodeIndex = nodeIndex1;
-          stackNodes[stackIndex].m_InwardsOffset = inwardsOffsetLocal;
-          stackNodes[stackIndex].m_ComplementOffset = complementOffsetLocal;
+          stackNodes[stackIndex].m_InStart = inStartLocal;
+          stackNodes[stackIndex].m_InEnd = inStartLocal;
+          stackNodes[stackIndex].m_CoStart = coEndLocal;
+          stackNodes[stackIndex].m_CoEnd = coEndLocal;
           ++stackIndex;
         }
         else
@@ -544,14 +559,18 @@ private:
           stackNodes[stackIndex].m_Index = index;
           stackNodes[stackIndex].m_Size = sz1;
           stackNodes[stackIndex].m_NodeIndex = nodeIndex1;
-          stackNodes[stackIndex].m_InwardsOffset = inwardsOffsetLocal;
-          stackNodes[stackIndex].m_ComplementOffset = complementOffsetLocal;
+          stackNodes[stackIndex].m_InStart = inStartLocal;
+          stackNodes[stackIndex].m_InEnd = inStartLocal;
+          stackNodes[stackIndex].m_CoStart = coEndLocal;
+          stackNodes[stackIndex].m_CoEnd = coEndLocal;
           ++stackIndex;
           stackNodes[stackIndex].m_Index = midIndex;
           stackNodes[stackIndex].m_Size = sz2;
           stackNodes[stackIndex].m_NodeIndex = nodeIndex2;
-          stackNodes[stackIndex].m_InwardsOffset = inwardsOffsetLocal;
-          stackNodes[stackIndex].m_ComplementOffset = complementOffsetLocal;
+          stackNodes[stackIndex].m_InStart = inStartLocal;
+          stackNodes[stackIndex].m_InEnd = inStartLocal;
+          stackNodes[stackIndex].m_CoStart = coEndLocal;
+          stackNodes[stackIndex].m_CoEnd = coEndLocal;
           ++stackIndex;
         }
 
