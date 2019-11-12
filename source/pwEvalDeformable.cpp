@@ -331,7 +331,7 @@ class PWEvalDeformable
             t.beforePerf.push_back(beforeFwdPM);
             t.afterPerf.push_back(afterFwdPM);
             t.beforePerf.push_back(beforeRevPM);
-            t.afterPerf.push_back(afterFwdPM);
+            t.afterPerf.push_back(afterRevPM);
 
             char str[512];
             sprintf(str, "R%dF%d: [Before]", refIndex, floIndex);
