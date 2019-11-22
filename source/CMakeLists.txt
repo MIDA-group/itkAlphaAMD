@@ -41,6 +41,8 @@ add_executable(PWEvalDeformableND pwEvalDeformableND.cpp)
 
 add_executable(ABSReg absReg.cpp)
 
+add_executable(TestMCDS testMCDS.cpp)
+
 target_link_libraries(ACRandomTransforms ${ITK_LIBRARIES})
 
 target_link_libraries(ACRegister ${ITK_LIBRARIES})
@@ -64,3 +66,6 @@ target_link_libraries(SynthEvalDeformableND ${ITK_LIBRARIES})
 target_link_libraries(PWEvalDeformableND ${ITK_LIBRARIES})
 
 target_link_libraries(ABSReg ${ITK_LIBRARIES})
+
+target_link_libraries(TestMCDS ${ITK_LIBRARIES})
+

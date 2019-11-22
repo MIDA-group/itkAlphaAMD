@@ -1,11 +1,56 @@
 
 #include <itkImage.h>
 #include <itkArray.h>
+#include <itkNearestNeighborInterpolateImageFunction.h>
 //#include <itkImageRegionConstIterator.h>
 #include <cmath>
 #include <algorithm>
 
 #include "samplers.h"
+
+/*
+template <typename T>
+struct Array2DView {
+  T* data;
+  unsigned int rows;
+
+  inline T& Get(unsigned int row, unsigned int col) {
+    return data[col * rows + row];
+  }
+};*/
+
+// Functions for management of a 2D table mapped on a 1D vector
+template <typename T>
+inline T& Array2DViewGet(T* data, unsigned int rows, unsigned int row, unsigned int col) { return data[rows*col + row]; }
+template <typename T>
+inline T& Array2DViewSet(T* data, unsigned int rows, unsigned int row, unsigned int col, const T& val) { data[rows*col + row] = val; }
+template <typename T>
+inline void Array2DViewUpdateDistances(T* data, unsigned int rows, unsigned int rowStart, unsigned int rowEnd, unsigned int col) {
+   return;
+}
+template <typename T>
+inline double Array2DViewColMean(T* data, unsigned int rows, unsigned int rowStart, unsigned rowEnd, unsigned int col) {
+  unsigned int count = (rowEnd-rowStart);
+  unsigned int startInd = col * rows + rowStart;
+  unsigned int endInd = startInd + count;
+  double value = 0.0;
+  for(unsigned int i = startInd; i < endInd; ++i) {
+    value += data[i];
+  }
+  return value / count;
+}
+template <typename T>
+inline void Array2DViewFill(T* data, unsigned int rows, unsigned int rowStart, unsigned rowEnd, unsigned int col, const T& value) {
+  unsigned int count = (rowEnd-rowStart);
+  unsigned int startInd = col * rows + rowStart;
+  unsigned int endInd = startInd + count;
+  for(unsigned int i = startInd; i < endInd; ++i) {
+    data[i] = value;
+  }
+}
+
+//template <typename T>
+//void Array2DViewPrune
 
 template <unsigned int Dim>
 struct ValuedCornerPoints;
@@ -202,6 +247,29 @@ inline unsigned int LargestDimension(itk::Size<ImageDimension> &sz)
   return res;
 }
 
+template <typename IndexType, typename SizeType, unsigned int ImageDimension>
+unsigned int MaxNodeIndex(IndexType index, SizeType size, unsigned int nodeIndex) {
+      if(PixelCount(size) <= 1U) {
+        return nodeIndex;
+      }
+
+      IndexType midIndex = index;
+      unsigned int selIndex = LargestDimension<ImageDimension>(size);
+      unsigned int maxSz = size[selIndex];
+
+      midIndex[selIndex] = midIndex[selIndex] + maxSz / 2;
+      SizeType sz1 = size;
+      SizeType sz2 = size;
+
+      sz1[selIndex] = sz1[selIndex] / 2;
+      sz2[selIndex] = size[selIndex] - sz1[selIndex];
+
+      unsigned int nodeIndex1 = nodeIndex * 2;
+      unsigned int nodeIndex2 = nodeIndex * 2 + 1;
+
+      return MaxNodeIndex<IndexType, SizeType, ImageDimension>(midIndex, sz2, nodeIndex2);
+}
+
 template <typename IndexType, typename SizeType, unsigned int ImageDimension, typename SpacingType>
 inline double LowerBoundDistance(IndexType pnt, IndexType rectOrigin, SizeType rectSz, SpacingType &sp)
 {
@@ -242,9 +310,40 @@ template <typename T>
 void FillVector(std::vector<T>& v, size_t count, const T& value) {
   v.clear();
   v.reserve(count);
-  for(size_t i = 0; i < count; ++i) {
-    v.push_back(value);
+  //for(size_t i = 0; i < count; ++i) {
+  //  v.push_back(value);
+  //}
+  v.insert(v.end(), count, value);
+}
+
+template <typename T>
+unsigned int PruneLevelsLinear(const T* values, unsigned int start, unsigned int end, T val) {
+  for(; start < end; --end) {
+    if(values[end-1] <= val) {
+      break;
+    }
   }
+  return end;
+}
+
+template <typename T>
+unsigned int PruneLevelsBinary(const std::vector<T>& values, unsigned int start, unsigned int end, T val) {
+  if(start < end) {
+    if(values[end-1] <= val)
+      return end;
+    else
+      --end;
+  } 
+  while(start < end) {
+    unsigned int mid = start + (end-start)/2;
+    T midval = values[mid];
+    if(midval > val) {
+      end = mid;
+    } else {
+      start = mid + 1;
+    }
+  }
+  return end;
 }
 
 template <typename ImageType, typename SamplerType>
@@ -265,6 +364,11 @@ public:
   typedef itk::Vector<ValueType, 2U> NodeValueType;
   typedef typename ImageType::PointType PointType;
 
+  typedef itk::Image<bool, ImageDimension> MaskImageType;
+  typedef typename MaskImageType::Pointer MaskImagePointer;
+  typedef itk::NearestNeighborInterpolateImageFunction<MaskImageType, double> InterpolatorType;
+  typedef typename InterpolatorType::Pointer InterpolatorPointer;
+
   typedef CornerPoints<IndexValueType, ImageType::ImageDimension> CornersType;
 
   //MCDS(const MCDS&) = delete;
@@ -276,6 +380,10 @@ public:
     m_RawImagePtr = image.GetPointer();
   }
 
+  void SetMaskImage(MaskImagePointer maskImage) {
+    m_MaskImage = maskImage;
+  }
+
   void SetOne(ValueType one)
   {
     m_One = one;
@@ -285,9 +393,9 @@ public:
     m_MaxDistance = dmax;
   }
 
-  void SetMaxSampleCount(unsigned int count)
+  void SetSampleCount(unsigned int count)
   {
-    m_MaxSampleCount = count;
+    m_SampleCount = count;
   }
 
   // Builds the kd-tree and initializes data-structures
@@ -311,22 +419,33 @@ public:
       m_Height += logsz;
     }
 
-    unsigned int nodeCount = (unsigned int)(pow(2.0, (double)m_Height) + 0.5);
-    NodeValueType nv = {itk::NumericTraits<ValueType>::ZeroValue()};
-    FillVector<NodeValueType>(m_Array, nodeCount, nv);
+    //unsigned int nodeCount = (unsigned int)(pow(2.0, (double)m_Height) + 0.5);
+    unsigned int nodeCount = MaxNodeIndex<IndexType, SizeType, ImageDimension>(region.GetIndex(), sz, 1);
+    //NodeValueType nv = {itk::NumericTraits<ValueType>::ZeroValue()};
+    //FillVector<NodeValueType>(m_Array, nodeCount, nv);
+    m_Array = std::move(std::unique_ptr<NodeValueType[]>(new NodeValueType[nodeCount]));
 
-    m_Samples.reserve(m_MaxSampleCount);
-    m_InwardsValues.reserve(m_MaxSampleCount);
-    m_ComplementValues.reserve(m_MaxSampleCount);
+    m_Samples.reserve(m_SampleCount);
+    m_InwardsValues.reserve(m_SampleCount);
+    m_ComplementValues.reserve(m_SampleCount);
 
-    BuildTreeRec(1, region.GetIndex(), sz, m_Height);
+    if(PixelCount(sz) > 0)
+      //BuildTreeLoop(region.GetIndex(), sz);
+      BuildTreeRec(1, region.GetIndex(), sz);
 
     m_Corners = ComputeCorners<IndexValueType, ImageType::ImageDimension>();
 
+    m_DebugVisitCount = 0;
+
     // Initialize table
-    m_Table.SetSize(m_MaxSampleCount, CornersType::size);
+    m_Table = std::move(std::unique_ptr<double[]>(new double[m_SampleCount * CornersType::size]));
 
     m_RawImagePtr = m_Image.GetPointer();
+
+    if(m_MaskImage) {
+      m_MaskInterpolator = InterpolatorType::New();
+      m_MaskInterpolator->SetInputImage(m_MaskImage);
+    }
   }
   /*
       IndexType index,
@@ -339,7 +458,6 @@ public:
   bool ValueAndDerivative(
     PointType point,
     ValueType h,
-    unsigned int samples,
     double& valueOut,
     itk::Vector<double, ImageDimension>& gradOut) const {
 
@@ -348,6 +466,16 @@ public:
     unsigned int inwardsCount,
     itk::Array<ValueType>& complementValues,
     unsigned int complementCount,*/
+
+    // If we have a mask, check if we are inside the mask image bounds, and inside the mask
+    if(m_MaskImage) {
+      if(m_MaskInterpolator->IsInsideBuffer(point)) {
+        if(!m_MaskInterpolator->Evaluate(point))
+          return false;
+      } else {
+        return false;
+      }
+    }
 
     ContinousIndexType cIndex;
     IndexType pntIndex; // Generate the index
@@ -360,10 +488,10 @@ public:
     }
     
     // Sample
-    m_Sampler.Sample(samples, m_Samples);
+    m_Sampler.Sample(m_SampleCount, m_Samples);
     m_InwardsValues.clear();
     m_ComplementValues.clear();
-    for(unsigned int i = 0; i < samples; ++i) {
+    for(unsigned int i = 0; i < m_SampleCount; ++i) {
       if(m_Samples[i][0] <= h) {
         m_InwardsValues.push_back(m_Samples[i][0]);
       } else {
@@ -383,9 +511,12 @@ public:
     //std::cout << std::endl;
 
     double dmax = m_MaxDistance;
+    double dmaxSq = dmax * dmax;
     for(unsigned int i = 0; i < CornersType::size; ++i) {
-      for(unsigned int j = 0; j < samples; ++j) {
-        m_Table.SetElement(j, i, dmax*dmax);
+      double* dists_i = m_Table.get() + (m_SampleCount * i);
+
+      for(unsigned int j = 0; j < m_SampleCount; ++j) {
+        dists_i[j] = dmaxSq;
       }
     }
 
@@ -395,28 +526,39 @@ public:
 
     for(unsigned int i = 0; i < CornersType::size; ++i) {
       cornerValues.m_Values[i] = 0.0;
+      double* dists_i = m_Table.get() + (m_SampleCount * i);
 
-      for(unsigned int j = 0; j < samples; ++j) {
-        cornerValues.m_Values[i] += sqrt(m_Table.GetElement(j, i));
+      for(unsigned int j = 0; j < m_SampleCount; ++j) {
+        cornerValues.m_Values[i] += sqrt(dists_i[j]);
       }
 
-      cornerValues.m_Values[i] = cornerValues.m_Values[i] / samples;
+      cornerValues.m_Values[i] = cornerValues.m_Values[i] / m_SampleCount;
     }
 
     valueOut = InterpolateDistances<ImageDimension>(frac, cornerValues, gradOut);
 
+    // Apply spacing to gradient
+    typedef typename ImageType::SpacingType SpacingType;
+    SpacingType spacing = m_Image->GetSpacing();
+    
+    for(unsigned int i = 0; i < ImageDimension; ++i)
+      gradOut[i] /= spacing[i];
+
     return true;
   }
+  mutable size_t m_DebugVisitCount;
 private:
   ImagePointer m_Image;
   ImageType* m_RawImagePtr;
-  std::vector<NodeValueType> m_Array;
+  MaskImagePointer m_MaskImage;
+  InterpolatorPointer m_MaskInterpolator;
+  std::unique_ptr<NodeValueType[]> m_Array;
   unsigned int m_Height;
-  unsigned int m_MaxSampleCount;
+  unsigned int m_SampleCount;
   ValueType m_One;
   double m_MaxDistance;
   CornersType m_Corners;
-  mutable itk::Array2D<double> m_Table;
+  mutable std::unique_ptr<double[]> m_Table;
   mutable SamplerType m_Sampler;
   mutable std::vector<ValueType> m_InwardsValues;
   mutable std::vector<ValueType> m_ComplementValues;
@@ -433,24 +575,25 @@ private:
     unsigned int m_CoEnd;
   };
 
-  void BuildTreeRec(unsigned int nodeIndex, IndexType index, SizeType sz, unsigned int depthCountDown)
+  void BuildTreeRec(unsigned int nodeIndex, IndexType index, SizeType sz)
   {
     constexpr unsigned int dim = ImageType::ImageDimension;
 
     typedef itk::ImageRegionConstIterator<ImageType> IteratorType;
+    NodeValueType* data = m_Array.get();
 
     unsigned int szCount = PixelCount<dim>(sz);
-
-    if (szCount == 0U)
-    {
-      ;
-    }
-    else if (szCount == 1U)
+//if (szCount == 0U)
+ //   {
+ //     ;
+  //  }
+    //else 
+    if (szCount == 1U)
     {
       NodeValueType nv;
       nv[0] = m_Image->GetPixel(index);
       nv[1] = m_One - nv[0];
-      m_Array[nodeIndex - 1] = nv;
+      data[nodeIndex - 1] = nv;
     }
     else
     {
@@ -468,20 +611,21 @@ private:
       unsigned int nodeIndex1 = nodeIndex * 2;
       unsigned int nodeIndex2 = nodeIndex * 2 + 1;
 
-      BuildTreeRec(nodeIndex1, index, sz1, depthCountDown - 1);
-      BuildTreeRec(nodeIndex2, midIndex, sz2, depthCountDown - 1);
+      BuildTreeRec(nodeIndex1, index, sz1);
+      BuildTreeRec(nodeIndex2, midIndex, sz2);
 
-      NodeValueType n1 = m_Array[nodeIndex1 - 1];
-      NodeValueType n2 = m_Array[nodeIndex2 - 1];
+      NodeValueType n1 = *(data + (nodeIndex1 - 1));
+      NodeValueType n2 = *(data + (nodeIndex2 - 1));
 
+      NodeValueType* dataCur = data + (nodeIndex-1);
       // Compute the maximum of the two nodes, for each channel
       for (unsigned int i = 0; i < 2U; ++i)
       {
         if (n2[i] > n1[i])
-          n1[i] = n2[i];
+          (*dataCur)[i] = n2[i];
+        else
+          (*dataCur)[i] = n1[i];
       }
-
-      m_Array[nodeIndex - 1] = n1;
     }
   }
 
@@ -490,17 +634,22 @@ private:
   {
     constexpr unsigned int dim = ImageType::ImageDimension;
 
-    std::vector<ValueType>& inwardsValues = m_InwardsValues;
-    std::vector<ValueType>& complementValues = m_ComplementValues;
-    unsigned int inwardsCount = inwardsValues.size();
-    unsigned int complementCount = complementValues.size();
+    ValueType* inwardsValues = m_InwardsValues.data();
+    ValueType* complementValues = m_ComplementValues.data();
+    unsigned int inwardsCount = m_InwardsValues.size();
+    unsigned int complementCount = m_ComplementValues.size();
 
-    //typedef itk::ImageRegionConstIterator<ImageType> IteratorType;
     typedef typename ImageType::SpacingType SpacingType;
 
     ImageType *image = m_Image.GetPointer();
     SpacingType spacing = image->GetSpacing();
     ValueType one = m_One;
+
+    //itk::Array2D<double>& table = m_Table;
+    double* distTable = m_Table.get();
+    NodeValueType* data = m_Array.get();
+
+    unsigned int sampleCount = m_SampleCount;
 
     RegionType region = image->GetLargestPossibleRegion();
 
@@ -508,128 +657,121 @@ private:
 
     // Stack
     StackNode stackNodes[33];
-    unsigned int stackIndex = 1;
+    unsigned int stackIndex = 0;
 
     // Initialize the stack state
-    stackNodes[0].m_Index = region.GetIndex();
-    stackNodes[0].m_Size = region.GetSize();
-    stackNodes[0].m_NodeIndex = 1;
-    stackNodes[0].m_InStart = 0;
-    stackNodes[0].m_InEnd = inwardsCount;
-    stackNodes[0].m_CoStart = 0;
-    stackNodes[0].m_CoEnd = complementCount;
-    
-    CornersType corners;
+    IndexType curIndex = region.GetIndex();
+    SizeType curSize = region.GetSize();
+    unsigned int curInStart = 0;
+    unsigned int curInEnd = inwardsCount;
+    unsigned int curCoStart = 0;
+    unsigned int curCoEnd = complementCount;
+    unsigned int nodeIndex = 1;
+
+    itk::FixedArray<itk::Point<double, ImageDimension>, CornersType::size> corners;
 
     for (unsigned int i = 0; i < cornerCount; ++i)
     {
       itk::FixedArray<long int, ImageDimension> crnr = m_Corners.m_Points[i];
+      itk::Point<double, ImageDimension> crnrPoint;
 
       for (unsigned int j = 0; j < dim; ++j)
       {
-        crnr[j] = crnr[j] + index[j];
+        crnrPoint[j] = static_cast<double>(crnr[j] + index[j]) * spacing[j];
       }
-      corners.m_Points[i] = crnr;
+      corners[i] = crnrPoint;
     }
 
-    while (stackIndex > 0)
+    unsigned int visitCount = 0;
+    while(true)
     {
-      --stackIndex;
-      
-      SizeType nodeSz = stackNodes[stackIndex].m_Size;
-      unsigned int npx = PixelCount<dim>(nodeSz);
-      //std::cout << "Pixels: " << npx << " ";
+      ++visitCount;
 
-      // Can I remove this?
-      if (npx == 0U)
-      {
-        continue;
-      }
+      unsigned int npx = PixelCount<dim>(curSize);
 
-      unsigned int inStartLocal = stackNodes[stackIndex].m_InStart;
-      unsigned int inEndLocal = stackNodes[stackIndex].m_InEnd;
-      unsigned int coStartLocal = stackNodes[stackIndex].m_CoStart;
-      unsigned int coEndLocal = stackNodes[stackIndex].m_CoEnd;
+      NodeValueType nv = data[nodeIndex-1];//m_Array[nodeIndex-1];
 
-      unsigned int nodeIndex = stackNodes[stackIndex].m_NodeIndex;
-      NodeValueType nv = m_Array[nodeIndex-1];
-
-      //std::cout << "NV: " << nv << "\n";
-
-      // Eliminate inwards values
-      for (; inStartLocal < inEndLocal; --inEndLocal)
-      {
-        ValueType val = inwardsValues[inEndLocal - 1];
-        if (val <= nv[0]) {
-          break;
-        }
-      }
-      // Eliminate complement values
-      for (; coStartLocal < coEndLocal; --coEndLocal)
-      {
-        ValueType val = complementValues[coEndLocal - 1];
-        if (val <= nv[1]) {
-          break;
-        }
-      }
+      curInEnd = PruneLevelsLinear(inwardsValues, curInStart, curInEnd, nv[0]);
+      curCoEnd = PruneLevelsLinear(complementValues, curCoStart, curCoEnd, nv[1]);
 
       // Is the node a leaf - compute distances
       if (npx == 1U)
       {
-        IndexType leafInd = stackNodes[stackIndex].m_Index;
+        itk::Point<double, ImageDimension> leafPoint;
+        for(unsigned int j = 0; j < ImageDimension; ++j)
+          leafPoint[j] = static_cast<double>(curIndex[j]*spacing[j]);
+        itk::FixedArray<double, CornersType::size> dists;
 
         for (unsigned int i = 0; i < cornerCount; ++i)
         {
-          double d = 0.0;
-          for (unsigned int j = 0; j < dim; ++j)
-          {
-            double inddiff_j = ((double)corners.m_Points[i][j] - (double)leafInd[j]) * spacing[j];
-            d += inddiff_j * inddiff_j;
-          }
+          dists[i] = corners[i].SquaredEuclideanDistanceTo(leafPoint);
+        }
 
-          // Compare d with all the distances recorded for the alpha levels (which are still in play)
+        // Compare d with all the distances recorded for the alpha levels (which are still in play)
+        for (unsigned int i = 0; i < cornerCount; ++i)
+        {
+          const double d = dists[i];
+          double* distTable_i = distTable + (sampleCount * i);
 
-          for (unsigned int j = inEndLocal; inStartLocal < j; --j)
+          for (unsigned int j = curInEnd; curInStart < j; --j)
           {
-            double cur_j = m_Table.GetElement(j-1, i);
+            unsigned int tabInd = j-1;
+            double cur_j = distTable_i[tabInd];
             if (d < cur_j)
             {
-              m_Table.SetElement(j-1, i, d);
-            } else {
-              break;
-            }
-          }
-          for (unsigned int j = coEndLocal; coStartLocal < j; --j)
-          {
-            double cur_j = m_Table.GetElement(j+inwardsCount-1, i);
-            if (d < cur_j)
-            {
-              m_Table.SetElement(j+inwardsCount-1, i, d);
+              distTable_i[tabInd] = d;
             } else {
               break;
             }
           }
         }
+        for (unsigned int i = 0; i < cornerCount; ++i)
+        {
+          const double d = dists[i];
+          double* distTable_i = distTable + (sampleCount * i);
+
+          for (unsigned int j = curCoEnd; curCoStart < j; --j)
+          {
+            unsigned int tabInd = j+inwardsCount-1;
+            double cur_j = distTable_i[tabInd];//table.GetElement(tabInd, i);
+            if (d < cur_j)
+            {
+              //table.SetElement(tabInd, i, d);
+              distTable_i[tabInd] = d;
+            } else {
+              break;
+            }
+          }
+        }
+
+        if(stackIndex == 0)
+          break;
+        --stackIndex;
+        curIndex = stackNodes[stackIndex].m_Index;
+        curSize = stackNodes[stackIndex].m_Size;
+        nodeIndex = stackNodes[stackIndex].m_NodeIndex;
+        curInStart = stackNodes[stackIndex].m_InStart;
+        curInEnd = stackNodes[stackIndex].m_InEnd;
+        curCoStart = stackNodes[stackIndex].m_CoStart;
+        curCoEnd = stackNodes[stackIndex].m_CoEnd;
       }
       else
       { // Continue traversing the tree
         // Compute lower bound on distance for all pixels in the node
-        IndexType innerNodeInd = stackNodes[stackIndex].m_Index;
-        SizeType innerNodeSz = stackNodes[stackIndex].m_Size;
-        double lowerBoundDistance = LowerBoundDistance<IndexType, SizeType, dim>(index, innerNodeInd, innerNodeSz, spacing);
+        double lowerBoundDistance = LowerBoundDistance<IndexType, SizeType, dim>(index, curIndex, curSize, spacing);
 
         //std::cout << "LB: " << lowerBoundDistance << "\n";
         // Eliminate inwards values based on distance bounds
-        for (; inStartLocal < inEndLocal; ++inStartLocal)
+        for (; curInStart < curInEnd; ++curInStart)
         {
-          double cur_j = m_Table.GetElement(inStartLocal, 0);
+          double cur_j = distTable[curInStart];//table.GetElement(inStartLocal, 0);
           if (lowerBoundDistance <= cur_j)
             break;
         }
         // Eliminate complement values based on distance bounds
-        for (; coStartLocal < coEndLocal; ++coStartLocal)
+        for (; curCoStart < curCoEnd; ++curCoStart)
         {
-          double cur_j = m_Table.GetElement(coStartLocal+inwardsCount, 0);
+          double cur_j = distTable[curCoStart+inwardsCount];//table.GetElement(coStartLocal+inwardsCount, 0);
           if (lowerBoundDistance <= cur_j)
             break;
         }
@@ -637,68 +779,69 @@ private:
         //std::cout << "inStartLocal: " << inStartLocal << ", inEndLocal: " << inEndLocal << " ";
         //std::cout << "coStartLocal: " << coStartLocal << ", coEndLocal: " << coEndLocal << " ";
         // If all alpha levels are eliminated, backtrack...
-        if (inStartLocal == inEndLocal && coStartLocal == coEndLocal)
+        if (curInStart == curInEnd && curCoStart == curCoEnd)
         {
+          if(stackIndex == 0)
+            break;
+          --stackIndex;
+          curIndex = stackNodes[stackIndex].m_Index;
+          curSize = stackNodes[stackIndex].m_Size;
+          nodeIndex = stackNodes[stackIndex].m_NodeIndex;
+          curInStart = stackNodes[stackIndex].m_InStart;
+          curInEnd = stackNodes[stackIndex].m_InEnd;
+          curCoStart = stackNodes[stackIndex].m_CoStart;
+          curCoEnd = stackNodes[stackIndex].m_CoEnd;
           continue;
         }
 
-        IndexType midIndex = innerNodeInd;
-        unsigned int selIndex = LargestDimension<dim>(innerNodeSz);
-        unsigned int maxSz = innerNodeSz[selIndex];
+        IndexType midIndex = curIndex;
+        unsigned int selIndex = LargestDimension<dim>(curSize);
+        unsigned int maxSz = curSize[selIndex];
+        unsigned int halfMaxSz = maxSz / 2;
 
-        midIndex[selIndex] = midIndex[selIndex] + maxSz / 2;
-        SizeType sz1 = innerNodeSz;
-        SizeType sz2 = innerNodeSz;
+        midIndex[selIndex] = midIndex[selIndex] + halfMaxSz;
+        SizeType sz1 = curSize;
+        SizeType sz2 = curSize;
 
-        sz1[selIndex] = sz1[selIndex] / 2;
-        sz2[selIndex] = innerNodeSz[selIndex] - sz1[selIndex];
+        sz1[selIndex] = halfMaxSz;
+        sz2[selIndex] = maxSz - halfMaxSz;
 
         unsigned int nodeIndex1 = nodeIndex * 2;
-        unsigned int nodeIndex2 = nodeIndex * 2 + 1;
+        unsigned int nodeIndex2 = nodeIndex1 + 1;
 
         if (index[selIndex] < midIndex[selIndex])
         {
           stackNodes[stackIndex].m_Index = midIndex;
           stackNodes[stackIndex].m_Size = sz2;
           stackNodes[stackIndex].m_NodeIndex = nodeIndex2;
-          stackNodes[stackIndex].m_InStart = inStartLocal;
-          stackNodes[stackIndex].m_InEnd = inEndLocal;
-          stackNodes[stackIndex].m_CoStart = coStartLocal;
-          stackNodes[stackIndex].m_CoEnd = coEndLocal;
+          stackNodes[stackIndex].m_InStart = curInStart;
+          stackNodes[stackIndex].m_InEnd = curInEnd;
+          stackNodes[stackIndex].m_CoStart = curCoStart;
+          stackNodes[stackIndex].m_CoEnd = curCoEnd;
           ++stackIndex;
-          stackNodes[stackIndex].m_Index = innerNodeInd;
-          stackNodes[stackIndex].m_Size = sz1;
-          stackNodes[stackIndex].m_NodeIndex = nodeIndex1;
-          stackNodes[stackIndex].m_InStart = inStartLocal;
-          stackNodes[stackIndex].m_InEnd = inEndLocal;
-          stackNodes[stackIndex].m_CoStart = coStartLocal;
-          stackNodes[stackIndex].m_CoEnd = coEndLocal;
-          ++stackIndex;
+          curSize = sz1;
+          nodeIndex = nodeIndex1;
         }
         else
         {
-          stackNodes[stackIndex].m_Index = innerNodeInd;
+          stackNodes[stackIndex].m_Index = curIndex;
           stackNodes[stackIndex].m_Size = sz1;
           stackNodes[stackIndex].m_NodeIndex = nodeIndex1;
-          stackNodes[stackIndex].m_InStart = inStartLocal;
-          stackNodes[stackIndex].m_InEnd = inEndLocal;
-          stackNodes[stackIndex].m_CoStart = coStartLocal;
-          stackNodes[stackIndex].m_CoEnd = coEndLocal;
+          stackNodes[stackIndex].m_InStart = curInStart;
+          stackNodes[stackIndex].m_InEnd = curInEnd;
+          stackNodes[stackIndex].m_CoStart = curCoStart;
+          stackNodes[stackIndex].m_CoEnd = curCoEnd;
           ++stackIndex;
-          stackNodes[stackIndex].m_Index = midIndex;
-          stackNodes[stackIndex].m_Size = sz2;
-          stackNodes[stackIndex].m_NodeIndex = nodeIndex2;
-          stackNodes[stackIndex].m_InStart = inStartLocal;
-          stackNodes[stackIndex].m_InEnd = inEndLocal;
-          stackNodes[stackIndex].m_CoStart = coStartLocal;
-          stackNodes[stackIndex].m_CoEnd = coEndLocal;
-          ++stackIndex;
+          curIndex = midIndex;
+          curSize = sz2;
+          nodeIndex = nodeIndex2;
         }
 
       } // End of else branch
 
     } // End main "recursion" loop
 
+    m_DebugVisitCount += visitCount;
   } // End of Search function
 
 }; // End of class

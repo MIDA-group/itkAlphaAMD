@@ -7,6 +7,12 @@
 
 #include "samplers.h"
 
+template <typename T, unsigned int Channels>
+struct KDTreeNode {
+  itk::Vector<T, Channels>  m_Max;
+  unsigned int m_RightOffset;
+};
+
 template <unsigned int Dim>
 struct ValuedCornerPoints;
 
@@ -262,7 +268,7 @@ public:
   typedef typename itk::ContinuousIndex<double, ImageType::ImageDimension> ContinousIndexType;
   typedef typename ImageType::SpacingType SpacingType;
   typedef typename ImageType::ValueType ValueType;
-  typedef itk::Vector<ValueType, 2U> NodeValueType;
+  typedef KDTreeNode<ValueType, 2U> NodeValueType;
   typedef typename ImageType::PointType PointType;
 
   typedef CornerPoints<IndexValueType, ImageType::ImageDimension> CornersType;
@@ -312,7 +318,9 @@ public:
     }
 
     unsigned int nodeCount = (unsigned int)(pow(2.0, (double)m_Height) + 0.5);
-    NodeValueType nv = {itk::NumericTraits<ValueType>::ZeroValue()};
+    NodeValueType nv;
+    nv.m_Max = {itk::NumericTraits<ValueType>::ZeroValue()};
+    nv.m_RightOffset = 0;
     FillVector<NodeValueType>(m_Array, nodeCount, nv);
 
     m_Samples.reserve(m_MaxSampleCount);
@@ -433,7 +441,7 @@ private:
     unsigned int m_CoEnd;
   };
 
-  void BuildTreeRec(unsigned int nodeIndex, IndexType index, SizeType sz, unsigned int depthCountDown)
+  unsigned int BuildTreeRec(unsigned int nodeIndex, IndexType index, SizeType sz, unsigned int depthCountDown)
   {
     constexpr unsigned int dim = ImageType::ImageDimension;
 
@@ -443,14 +451,16 @@ private:
 
     if (szCount == 0U)
     {
-      ;
+      return nodeIndex;
     }
     else if (szCount == 1U)
     {
       NodeValueType nv;
-      nv[0] = m_Image->GetPixel(index);
-      nv[1] = m_One - nv[0];
+      nv.m_Max[0] = m_Image->GetPixel(index);
+      nv.m_Max[1] = m_One - nv.m_Max[0];
+      nv.m_RightOffset = 0;
       m_Array[nodeIndex - 1] = nv;
+      return nodeIndex + 1;
     }
     else
     {
@@ -465,23 +475,27 @@ private:
       sz1[selIndex] = sz1[selIndex] / 2;
       sz2[selIndex] = sz[selIndex] - sz1[selIndex];
 
-      unsigned int nodeIndex1 = nodeIndex * 2;
-      unsigned int nodeIndex2 = nodeIndex * 2 + 1;
+      //unsigned int nodeIndex1 = nodeIndex * 2;
+      //unsigned int nodeIndex2 = nodeIndex * 2 + 1;
 
-      BuildTreeRec(nodeIndex1, index, sz1, depthCountDown - 1);
-      BuildTreeRec(nodeIndex2, midIndex, sz2, depthCountDown - 1);
+      unsigned int nodeIndex2 = BuildTreeRec(nodeIndex+1, index, sz1, depthCountDown - 1);
 
-      NodeValueType n1 = m_Array[nodeIndex1 - 1];
+      unsigned int nodeIndex3 = BuildTreeRec(nodeIndex2, midIndex, sz2, depthCountDown - 1);
+
+      NodeValueType n1 = m_Array[nodeIndex];
       NodeValueType n2 = m_Array[nodeIndex2 - 1];
 
       // Compute the maximum of the two nodes, for each channel
       for (unsigned int i = 0; i < 2U; ++i)
       {
-        if (n2[i] > n1[i])
-          n1[i] = n2[i];
+        if (n2.m_Max[i] > n1.m_Max[i])
+          n1.m_Max[i] = n2.m_Max[i];
       }
+      n1.m_RightOffset = nodeIndex2;
 
       m_Array[nodeIndex - 1] = n1;
+
+      return nodeIndex3;
     }
   }
 
@@ -504,7 +518,8 @@ private:
 
     RegionType region = image->GetLargestPossibleRegion();
 
-    constexpr unsigned int cornerCount = CornersType::size;
+    unsigned int rows = inwardsCount + complementCount;
+    unsigned int cornerCount = CornersType::size;
 
     // Stack
     StackNode stackNodes[33];
@@ -560,7 +575,7 @@ private:
       for (; inStartLocal < inEndLocal; --inEndLocal)
       {
         ValueType val = inwardsValues[inEndLocal - 1];
-        if (val <= nv[0]) {
+        if (val <= nv.m_Max[0]) {
           break;
         }
       }
@@ -568,7 +583,7 @@ private:
       for (; coStartLocal < coEndLocal; --coEndLocal)
       {
         ValueType val = complementValues[coEndLocal - 1];
-        if (val <= nv[1]) {
+        if (val <= nv.m_Max[1]) {
           break;
         }
       }
@@ -653,8 +668,8 @@ private:
         sz1[selIndex] = sz1[selIndex] / 2;
         sz2[selIndex] = innerNodeSz[selIndex] - sz1[selIndex];
 
-        unsigned int nodeIndex1 = nodeIndex * 2;
-        unsigned int nodeIndex2 = nodeIndex * 2 + 1;
+        unsigned int nodeIndex1 = nodeIndex + 1;
+        unsigned int nodeIndex2 = nv.m_RightOffset;
 
         if (index[selIndex] < midIndex[selIndex])
         {

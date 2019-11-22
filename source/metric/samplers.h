@@ -28,7 +28,13 @@ class RandomSampler {
     void SetSeed(unsigned int seed) {
         m_Generator->SetSeed(seed);    
     }
-
+    void Sample(unsigned int n, std::vector<itk::Vector<double, 1U> >& out) {
+        out.clear();
+        for (unsigned int i = 0; i < n; ++i) {
+            double c = m_Generator->GetVariateWithClosedRange();
+            out.push_back(c);
+        }
+    }
     void SampleIndices(unsigned int n, std::vector<unsigned int>& out) {
         out.clear();
         for (unsigned int i = 0; i < n; ++i) {
@@ -72,6 +78,18 @@ public:
         m_State = m_Generator->GetVariateWithOpenUpperRange();
     }
 
+    void Sample(unsigned int n, std::vector<itk::Vector<double, 1U> >& out) {
+        double alpha = m_Alpha;
+        double state = m_State;
+        out.clear();
+        for (unsigned int i = 0; i < n; ++i) {
+            state = fmod(state + alpha, 1.0);
+            itk::Vector<double, 1U> statev;
+            statev[0] = state;
+            out.push_back(statev);
+        }
+        m_State = state;
+    }
     void SampleIndices(unsigned int n, std::vector<unsigned int>& out) {
         double alpha = m_Alpha;
         double state = m_State;
@@ -115,6 +133,20 @@ public:
     void Restart() {
         m_State[0] = m_Generator->GetVariateWithOpenUpperRange();
         m_State[1] = m_State[0];
+    }
+
+    void Sample(unsigned int n, std::vector<itk::Vector<double, 2U> >& out) {
+        itk::Vector<double, 2U> alpha = m_Alpha;
+        itk::Vector<double, 2U> state = m_State;
+        out.clear();
+        for (unsigned int i = 0; i < n; ++i) {
+            state[0] = fmod((state[0] + alpha[0]), 1.0);
+            state[1] = fmod((state[1] + alpha[1]), 1.0);
+
+            out.push_back(state);
+        }
+        
+        m_State = state;
     }
 
     void SampleIndices(unsigned int n, std::vector<unsigned int>& out) {
@@ -168,6 +200,21 @@ public:
         m_State[0] = m_Generator->GetVariateWithOpenUpperRange();
         m_State[1] = m_State[0];
         m_State[2] = m_State[0];
+    }
+
+    void Sample(unsigned int n, std::vector<itk::Vector<double, 3U> >& out) {
+        itk::Vector<double, 3U> alpha = m_Alpha;
+        itk::Vector<double, 3U> state = m_State;
+        out.clear();
+        for (unsigned int i = 0; i < n; ++i) {
+            state[0] = fmod((state[0] + alpha[0]), 1.0);
+            state[1] = fmod((state[1] + alpha[1]), 1.0);
+            state[2] = fmod((state[2] + alpha[2]), 1.0);
+
+            out.push_back(state);
+        }
+        
+        m_State = state;
     }
 
     void SampleIndices(unsigned int n, std::vector<unsigned int>& out) {
