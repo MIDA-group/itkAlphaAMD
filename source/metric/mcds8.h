@@ -69,20 +69,7 @@ CornerPoints<T, Dim> ComputeCorners() {
   
   return res;
 }
-/*
-  void ComputeCorners(unsigned int cur, unsigned int dim, unsigned int &pos, IndexType index)
-  {
-    // Order for 2d: [(0, 0), (0, 1), (1, 0), (1, 1)]
-    if (cur == 0)
-    {
-      m_Corners[pos++] = index;
-    } else {
-      ComputeCorners(cur - 1, dim, pos, index);
-      index[cur-1] = 1;
-      ComputeCorners(cur - 1, dim, pos, index);
-    }
-  }
-*/
+
 template <unsigned int ImageDimension>
 inline double InterpolateDistances(itk::Vector<double, ImageDimension> frac, ValuedCornerPoints<ImageDimension>& distanceValues, itk::Vector<double, ImageDimension>& grad);
 
@@ -228,41 +215,6 @@ unsigned int MaxNodeIndex(IndexType index, SizeType size, unsigned int nodeIndex
 template <typename IndexType, typename SizeType, unsigned int ImageDimension, typename SpacingType>
 inline double LowerBoundDistance(IndexType pnt, IndexType rectOrigin, SizeType rectSz, SpacingType sp)
 {
-/*{
-  double d = 0.0;
-  for (unsigned int i = 0; i < ImageDimension; ++i) {
-    double sz = rectSz[i] * sp[i];
-
-    double rad = 0.5 * sz;
-
-    double rectCentre_i = rectOrigin[i] + rad;
-    rad += 1.0;
-    double d_i = std::max(fabs(pnt[i] * sp[i] - rectCentre_i) - rad, 0.0);
-    d += d_i * d_i;
-  }
-  return d;*/
-/*  
-  double d = 0;
-  for (unsigned int i = 0; i < ImageDimension; ++i)
-  {
-    long long pnt_i = (long long)pnt[i];
-    long long lowEdgePos_i = (long long)rectOrigin[i] - 1;
-    long long highEdgePos_i = (long long)(rectOrigin[i] + rectSz[i] + 1);
-
-    // If outside:
-    if (pnt_i < lowEdgePos_i)
-    {
-      double d_i = (double)(lowEdgePos_i - pnt_i) * sp[i];
-      d += d_i * d_i;
-    }
-    else if (highEdgePos_i < pnt_i)
-    {
-      double d_i = (double)(pnt_i - highEdgePos_i) * sp[i];
-      d += d_i * d_i;
-    }
-  }
-  */
-
   double d = 0;
   for (unsigned int i = 0; i < ImageDimension; ++i)
   {
@@ -287,16 +239,6 @@ inline bool SizeIsEmpty(itk::Size<ImageDimension> &sz)
       return true;
   }
   return false;
-}
-
-template <typename T>
-void FillVector(std::vector<T>& v, size_t count, const T& value) {
-  v.clear();
-  v.reserve(count);
-  //for(size_t i = 0; i < count; ++i) {
-  //  v.push_back(value);
-  //}
-  v.insert(v.end(), count, value);
 }
 
 template <typename T>
@@ -356,9 +298,6 @@ public:
 
   typedef CornerPoints<IndexValueType, ImageType::ImageDimension> CornersType;
 
-  //MCDS(const MCDS&) = delete;
-  //MCDS& operator=(const MCDS&) = delete;
-
   void SetImage(ImagePointer image)
   {
     m_Image = image;
@@ -404,10 +343,7 @@ public:
       m_Height += logsz;
     }
 
-    //unsigned int nodeCount = (unsigned int)(pow(2.0, (double)m_Height) + 0.5);
     unsigned int nodeCount = MaxNodeIndex<IndexType, SizeType, ImageDimension>(region.GetIndex(), sz, 1);
-    //NodeValueType nv = {itk::NumericTraits<ValueType>::ZeroValue()};
-    //FillVector<NodeValueType>(m_Array, nodeCount, nv);
     m_Array = std::move(std::unique_ptr<NodeValueType[]>(new NodeValueType[nodeCount]));
 
     m_Samples.reserve(m_SampleCount);
@@ -415,7 +351,6 @@ public:
     m_ComplementValues.reserve(m_SampleCount);
 
     if(PixelCount(sz) > 0)
-      //BuildTreeLoop(region.GetIndex(), sz);
       BuildTreeRec(1, region.GetIndex(), sz);
 
     m_Corners = ComputeCorners<IndexValueType, ImageType::ImageDimension>();
@@ -431,36 +366,8 @@ public:
       m_MaskInterpolator = InterpolatorType::New();
       m_MaskInterpolator->SetInputImage(m_MaskImage);
     }
-    /*
-    using StructuringElementType = itk::FlatStructuringElement<ImageDimension>;
-    typename StructuringElementType::RadiusType radius;
-    radius.Fill(5.0);
-    StructuringElementType structuringElement = StructuringElementType::Ball(radius);
-
-    typedef itk::GrayscaleDilateImageFilter<ImageType, ImageType, StructuringElementType> DilateFilterType;
-    typename DilateFilterType::Pointer dilateFilter = DilateFilterType::New();
-    dilateFilter->SetInput(m_Image);
-    dilateFilter->SetKernel(structuringElement);
-
-    dilateFilter->Update();
-    m_DilatedImage = dilateFilter->GetOutput();
-
-    typedef itk::GrayscaleErodeImageFilter<ImageType, ImageType, StructuringElementType> ErodeFilterType;
-    typename ErodeFilterType::Pointer erodeFilter = ErodeFilterType::New();
-    erodeFilter->SetInput(m_Image);
-    erodeFilter->SetKernel(structuringElement);
-
-    erodeFilter->Update();
-    m_ErodedImage = erodeFilter->GetOutput();*/
   }
-  /*
-      IndexType index,
-      itk::Array<ValueType> &inwardsValues,
-      unsigned int inwardsCount,
-      itk::Array<ValueType> &complementValues,
-      unsigned int complementCount,
-      itk::Array<double> &distOut
-      */
+
   bool ValueAndDerivative(
     PointType point,
     ValueType h,
@@ -468,11 +375,6 @@ public:
     itk::Vector<double, ImageDimension>& gradOut) const {
 
     ImageType* image = m_RawImagePtr;
-/*
-    itk::Array<ValueType>& inwardsValues,
-    unsigned int inwardsCount,
-    itk::Array<ValueType>& complementValues,
-    unsigned int complementCount,*/
 
     // If we have a mask, check if we are inside the mask image bounds, and inside the mask
     if(m_MaskImage) {
@@ -507,15 +409,6 @@ public:
     }
     std::sort(m_InwardsValues.begin(), m_InwardsValues.end());
     std::sort(m_ComplementValues.begin(), m_ComplementValues.end());
-
-    //for(unsigned int i = 0; i < m_InwardsValues.size(); ++i) {
-      //std::cout << m_InwardsValues[i] << ", ";
-    //}
-    //std::cout << std::endl;
-    //for(unsigned int i = 0; i < m_ComplementValues.size(); ++i) {
-      //std::cout << m_ComplementValues[i] << ", ";
-    //}
-    //std::cout << std::endl;
 
     RegionType region = image->GetLargestPossibleRegion();
 
@@ -646,11 +539,7 @@ private:
     NodeValueType* data = m_Array.get();
 
     unsigned int szCount = PixelCount<dim>(sz);
-//if (szCount == 0U)
- //   {
- //     ;
-  //  }
-    //else 
+
     if (szCount == 1U)
     {
       NodeValueType nv;
@@ -691,6 +580,7 @@ private:
       NodeValueType n2 = *(data + (nodeIndex2 - 1));
 
       NodeValueType* dataCur = data + (nodeIndex-1);
+
       // Compute the maximum of the two nodes, for each channel
       for (unsigned int i = 0; i < 2U; ++i)
       {
@@ -719,7 +609,6 @@ private:
     SpacingType spacing = image->GetSpacing();
     ValueType one = m_One;
 
-    //itk::Array2D<double>& table = m_Table;
     double* distTable = m_Table.get();
     NodeValueType* data = m_Array.get();
 
@@ -743,11 +632,6 @@ private:
     curStackNode.m_CoStart = complementStart;
     curStackNode.m_CoEnd = complementCount;
 
-    //itk::Point<double, ImageDimension> needlePoint;
-    //for (unsigned int i = 0; i < ImageDimension; ++i) {
-    //    needlePoint[i] = index[i];
-    //}
-
     itk::FixedArray<itk::Point<double, ImageDimension>, CornersType::size> corners;
 
     for (unsigned int i = 0; i < cornerCount; ++i)
@@ -761,8 +645,6 @@ private:
     unsigned int visitCount = 0;
     while(true)
     {
-      
-
       SizeType nodeSz = curStackNode.m_Size;
       unsigned int npx = nodeSz[0];
       for(unsigned int i = 1; i < ImageDimension; ++i) {
@@ -845,14 +727,14 @@ private:
         const double xponent = 1.1;
         const double xponentSq = xponent*xponent;
         if(lowerBoundDistance > thresholdSq) {
-          lowerBoundDistance = (thresholdSq-1.0) + ((lowerBoundDistance-thresholdSq)+1.0) * xponentSq; //pow((lowerBoundDistance-thresholdSq)+1.0, xponent);
+          lowerBoundDistance = (thresholdSq-1.0) + ((lowerBoundDistance-thresholdSq)+1.0) * xponentSq;
         }
         // --- Approximation ends here ---
 
         // Eliminate inwards values based on distance bounds
         for (; inStartLocal < inEndLocal; ++inStartLocal)
         {
-          double cur_j = distTable[inStartLocal];//table.GetElement(inStartLocal, 0);
+          double cur_j = distTable[inStartLocal];
           if (lowerBoundDistance <= cur_j)
             break;
         }
@@ -860,7 +742,7 @@ private:
         // Eliminate complement values based on distance bounds
         for (; coStartLocal < coEndLocal; ++coStartLocal)
         {
-          double cur_j = distTable[coStartLocal+inwardsCount];//table.GetElement(coStartLocal+inwardsCount, 0);
+          double cur_j = distTable[coStartLocal+inwardsCount];
           if (lowerBoundDistance <= cur_j)
             break;
         }
@@ -889,15 +771,11 @@ private:
         unsigned int nodeIndex1 = nodeIndex * 2;
         unsigned int nodeIndex2 = nodeIndex1 + 1;
 
-#define ENABLE_OPT
-
         if (index[selIndex] < midIndex[selIndex])
         {
-#ifdef ENABLE_OPT
           if((inStartLocal >= inEndLocal || data[nodeIndex2-1][0] < inwardsValues[inStartLocal]) && (coStartLocal >= coEndLocal || data[nodeIndex2-1][1] < complementValues[coStartLocal])) {
             ;
           } else
-#endif 
           {
           stackNodes[stackIndex].m_Index = midIndex;
           stackNodes[stackIndex].m_Size = sz2;
@@ -918,11 +796,9 @@ private:
         }
         else
         {
-#ifdef ENABLE_OPT
           if((inStartLocal >= inEndLocal || data[nodeIndex1-1][0] < inwardsValues[inStartLocal]) && (coStartLocal >= coEndLocal || data[nodeIndex1-1][1] < complementValues[coStartLocal])) {
             ;
           } else
-#endif
           {
           stackNodes[stackIndex].m_Index = innerNodeInd;
           stackNodes[stackIndex].m_Size = sz1;
