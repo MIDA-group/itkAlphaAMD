@@ -131,7 +131,7 @@ void DoTest(int argc, char** argv) {
     memorymeter.Stop("Loading");
 
     image = IPT::NormalizeImage(image, IPT::IntensityMinMax(image, 0.01));
-    std::cout << image << std::endl;
+    //std::cout << image << std::endl;
 
     unsigned int smpls = atoi(argv[3]);
     unsigned int N = argc > 4 ? atoi(argv[4]) : 100000;

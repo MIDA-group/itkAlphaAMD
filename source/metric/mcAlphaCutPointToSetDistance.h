@@ -202,6 +202,24 @@ inline unsigned int LargestDimension(itk::Size<ImageDimension> &sz)
 }
 
 template <typename IndexType, typename SizeType, unsigned int ImageDimension>
+inline unsigned int SplitRectangle(IndexType index, SizeType size, IndexType& midIndexOut, SizeType& szOut1, SizeType& szOut2) {
+  midIndexOut = index;
+
+  unsigned int selIndex = MCDSInternal::LargestDimension<ImageDimension>(size);
+  unsigned int maxSz = size[selIndex];
+  unsigned int halfMaxSz = maxSz / 2;
+
+  midIndexOut[selIndex] = index[selIndex] + halfMaxSz;
+  szOut1 = size;
+  szOut2 = size;
+
+  szOut1[selIndex] = halfMaxSz;
+  szOut2[selIndex] = maxSz - halfMaxSz;
+
+  return selIndex;
+}
+
+template <typename IndexType, typename SizeType, unsigned int ImageDimension>
 unsigned int MaxNodeIndex(IndexType index, SizeType size, unsigned int nodeIndex) {
       if(PixelCount(size) <= 1U) {
         return nodeIndex;
@@ -255,8 +273,6 @@ inline bool SizeIsEmpty(itk::Size<ImageDimension> &sz)
 
 template <typename T>
 unsigned int PruneLevelsLinear(const T* values, unsigned int start, unsigned int end, T val) {
-  //if(start < end && values[start] > val)
-    //return start;
   for(; start < end; --end) {
     if(values[end-1] <= val) {
       break;
@@ -581,14 +597,14 @@ private:
       NodeValueType nv;
       if(m_MaskImage) {
         if(m_MaskImage->GetPixel(index)) {
-          nv[0] = m_Image->GetPixel(index);
+          nv[0] = m_RawImagePtr->GetPixel(index);
           nv[1] = m_One - nv[0];
           data[nodeIndex - 1] = nv;
         } else {
           data[nodeIndex - 1].Fill(itk::NumericTraits<ValueType>::ZeroValue());
         }
       } else {
-        nv[0] = m_Image->GetPixel(index);
+        nv[0] = m_RawImagePtr->GetPixel(index);
         nv[1] = m_One - nv[0];
         data[nodeIndex - 1] = nv;
       }
@@ -607,13 +623,12 @@ private:
       sz2[selIndex] = sz[selIndex] - sz1[selIndex];
 
       unsigned int nodeIndex1 = nodeIndex * 2;
-      unsigned int nodeIndex2 = nodeIndex * 2 + 1;
 
       BuildTreeRec(nodeIndex1, index, sz1);
-      BuildTreeRec(nodeIndex2, midIndex, sz2);
+      BuildTreeRec(nodeIndex1+1, midIndex, sz2);
 
       NodeValueType n1 = *(data + (nodeIndex1 - 1));
-      NodeValueType n2 = *(data + (nodeIndex2 - 1));
+      NodeValueType n2 = *(data + nodeIndex1);
 
       NodeValueType* dataCur = data + (nodeIndex-1);
 
@@ -629,6 +644,267 @@ private:
   }
 
   void Search(
+      IndexType index,
+      unsigned int inwardsStart, unsigned int complementStart) const
+  {
+    constexpr unsigned int dim = ImageType::ImageDimension;
+
+    ValueType* inwardsValues = m_InwardsValues.data();
+    ValueType* complementValues = m_ComplementValues.data();
+    unsigned int inwardsCount = m_InwardsValues.size();
+    unsigned int complementCount = m_ComplementValues.size();
+
+    typedef typename ImageType::SpacingType SpacingType;
+
+    ImageType *image = m_Image.GetPointer();
+    SpacingType spacing = image->GetSpacing();
+    ValueType one = m_One;
+
+    double* distTable = m_Table.get();
+    NodeValueType* data = m_Array.get();
+
+    unsigned int sampleCount = m_SampleCount;
+
+    RegionType region = image->GetLargestPossibleRegion();
+
+    constexpr unsigned int cornerCount = CornersType::size;
+
+    // Stack
+    StackNode stackNodes[33];
+    StackNode curStackNode;
+    unsigned int stackIndex = 0;
+
+    // Initialize the stack state
+    curStackNode.m_Index = region.GetIndex();
+    curStackNode.m_Size = region.GetSize();
+    curStackNode.m_NodeIndex = 1;
+    curStackNode.m_InStart = inwardsStart;
+    curStackNode.m_InEnd = MCDSInternal::PruneLevelsLinear(inwardsValues, inwardsStart, inwardsCount, data[0][0]);
+    curStackNode.m_CoStart = complementStart;
+    curStackNode.m_CoEnd = MCDSInternal::PruneLevelsLinear(complementValues, complementStart, complementCount, data[0][1]);
+
+    // All elements eliminated before entering the loop. Search is over. Return.
+    if(curStackNode.m_InStart == curStackNode.m_InEnd && curStackNode.m_CoStart == curStackNode.m_CoEnd)
+      return;
+
+    itk::FixedArray<itk::Point<double, ImageDimension>, CornersType::size> corners;
+
+    for (unsigned int i = 0; i < cornerCount; ++i)
+    {
+      for (unsigned int j = 0; j < dim; ++j)
+      {
+        corners[i][j] = static_cast<double>(m_Corners.m_Points[i][j] + index[j]) * spacing[j];
+      }
+    }
+
+    unsigned int visitCount = 0;
+    while(true)
+    {
+      unsigned int npx = curStackNode.m_Size[0];
+      for(unsigned int i = 1; i < ImageDimension; ++i) {
+        npx *= curStackNode.m_Size[i];
+      }
+
+      unsigned int inStartLocal = curStackNode.m_InStart;
+      unsigned int inEndLocal = curStackNode.m_InEnd;
+      unsigned int coStartLocal = curStackNode.m_CoStart;
+      unsigned int coEndLocal = curStackNode.m_CoEnd;
+
+      // Is the node a leaf - compute distances
+      if (npx == 1U)
+      {
+        ++visitCount;
+        itk::Point<double, ImageDimension> leafPoint;
+        for(unsigned int j = 0; j < ImageDimension; ++j)
+          leafPoint[j] = static_cast<double>(curStackNode.m_Index[j]*spacing[j]);
+
+        // Compare d with all the distances recorded for the alpha levels (which are still in play)
+        for (unsigned int i = 0; i < cornerCount; ++i)
+        {
+          const double d = corners[i].SquaredEuclideanDistanceTo(leafPoint);
+          double* distTable_i = distTable + (sampleCount * i);
+          double* coDistTable_i = distTable_i + inwardsCount;
+
+          for (unsigned int j = coEndLocal; coStartLocal < j; --j)
+          {
+            unsigned int tabInd = j-1;//+inwardsCount
+            double cur_j = coDistTable_i[tabInd];
+            if (d < cur_j)
+            {
+              coDistTable_i[tabInd] = d;
+            } else {
+              break;
+            }
+          }          
+
+          for (unsigned int j = inEndLocal; inStartLocal < j; --j)
+          {
+            unsigned int tabInd = j-1;
+            double cur_j = distTable_i[tabInd];
+            if (d < cur_j)
+            {
+              distTable_i[tabInd] = d;
+            } else {
+              break;
+            }
+          }
+        }
+
+        if(stackIndex == 0)
+          break;
+        curStackNode = stackNodes[--stackIndex];
+      }
+      else
+      { // Continue traversing the tree
+        // Compute lower bound on distance for all pixels in the node
+        IndexType innerNodeInd = curStackNode.m_Index;
+        SizeType innerNodeSz = curStackNode.m_Size;
+        double lowerBoundDistance = MCDSInternal::LowerBoundDistance<IndexType, SizeType, dim>(index, innerNodeInd, innerNodeSz, spacing);
+
+        // --- Approximation starts here ---
+        constexpr double threshold = 20.0;
+        constexpr double thresholdSq = threshold*threshold;
+        const double xponent = 1.1;
+        const double xponentSq = xponent*xponent;
+        if(lowerBoundDistance > thresholdSq) {
+          lowerBoundDistance = (thresholdSq-1.0) + ((lowerBoundDistance-thresholdSq)+1.0) * xponentSq;
+        }
+        // --- Approximation ends here ---
+
+        // Eliminate inwards values based on distance bounds
+        for (; inStartLocal < inEndLocal; ++inStartLocal)
+        {
+          double cur_j = distTable[inStartLocal];
+          if (lowerBoundDistance <= cur_j)
+            break;
+        }
+
+        // Eliminate complement values based on distance bounds
+        for (; coStartLocal < coEndLocal; ++coStartLocal)
+        {
+          double cur_j = distTable[coStartLocal+inwardsCount];
+          if (lowerBoundDistance <= cur_j)
+            break;
+        }
+
+        // If all alpha levels are eliminated, backtrack
+        // without doing the work to compute the node split
+        // and tree value look-ups.
+        if (inStartLocal == inEndLocal && coStartLocal == coEndLocal)
+        {
+          if(stackIndex == 0)
+            break;
+          curStackNode = stackNodes[--stackIndex];
+          continue;
+        }
+
+        IndexType midIndex = innerNodeInd;
+        unsigned int selIndex = MCDSInternal::LargestDimension<dim>(innerNodeSz);
+        unsigned int maxSz = innerNodeSz[selIndex];
+        unsigned int halfMaxSz = maxSz / 2;
+
+        midIndex[selIndex] = midIndex[selIndex] + halfMaxSz;
+        SizeType sz1 = innerNodeSz;
+        SizeType sz2 = innerNodeSz;
+
+        sz1[selIndex] = halfMaxSz;
+        sz2[selIndex] = maxSz - halfMaxSz;
+
+        unsigned int nodeIndex1 = curStackNode.m_NodeIndex * 2;
+
+        unsigned int inEndLocal1 = MCDSInternal::PruneLevelsLinear(inwardsValues, inStartLocal, inEndLocal, data[nodeIndex1-1][0]);
+        unsigned int coEndLocal1 = MCDSInternal::PruneLevelsLinear(complementValues, coStartLocal, coEndLocal, data[nodeIndex1-1][1]);
+        unsigned int inEndLocal2 = MCDSInternal::PruneLevelsLinear(inwardsValues, inStartLocal, inEndLocal, data[nodeIndex1][0]);
+        unsigned int coEndLocal2 = MCDSInternal::PruneLevelsLinear(complementValues, coStartLocal, coEndLocal, data[nodeIndex1][1]);
+
+        if (index[selIndex] < midIndex[selIndex])
+        {
+          if(inStartLocal < inEndLocal1 || coStartLocal < coEndLocal1)
+          {
+            curStackNode.m_Index = innerNodeInd;
+            curStackNode.m_Size = sz1;
+            curStackNode.m_NodeIndex = nodeIndex1;
+            curStackNode.m_InStart = inStartLocal;
+            curStackNode.m_InEnd = inEndLocal1;
+            curStackNode.m_CoStart = coStartLocal;
+            curStackNode.m_CoEnd = coEndLocal1;
+            if(inStartLocal < inEndLocal2 || coStartLocal < coEndLocal2)
+            {
+              stackNodes[stackIndex].m_Index = midIndex;
+              stackNodes[stackIndex].m_Size = sz2;
+              stackNodes[stackIndex].m_NodeIndex = nodeIndex1+1;
+              stackNodes[stackIndex].m_InStart = inStartLocal;
+              stackNodes[stackIndex].m_InEnd = inEndLocal2;
+              stackNodes[stackIndex].m_CoStart = coStartLocal;
+              stackNodes[stackIndex].m_CoEnd = coEndLocal2;
+              ++stackIndex;
+            }
+          }
+          else if(inStartLocal < inEndLocal2 || coStartLocal < coEndLocal2)
+          {
+            curStackNode.m_Index = midIndex;
+            curStackNode.m_Size = sz2;
+            curStackNode.m_NodeIndex = nodeIndex1+1;
+            curStackNode.m_InStart = inStartLocal;
+            curStackNode.m_InEnd = inEndLocal2;
+            curStackNode.m_CoStart = coStartLocal;
+            curStackNode.m_CoEnd = coEndLocal2;
+          }
+          else
+          {
+            if(stackIndex == 0)
+              break;
+            curStackNode = stackNodes[--stackIndex];
+            continue;
+          }          
+        }
+        else
+        {
+          if(inStartLocal < inEndLocal2 || coStartLocal < coEndLocal2)
+          {
+            curStackNode.m_Index = midIndex;
+            curStackNode.m_Size = sz2;
+            curStackNode.m_NodeIndex = nodeIndex1+1;
+            curStackNode.m_InStart = inStartLocal;
+            curStackNode.m_InEnd = inEndLocal2;
+            curStackNode.m_CoStart = coStartLocal;
+            curStackNode.m_CoEnd = coEndLocal2;
+            if(inStartLocal < inEndLocal1 || coStartLocal < coEndLocal1)
+            {
+              stackNodes[stackIndex].m_Index = innerNodeInd;
+              stackNodes[stackIndex].m_Size = sz1;
+              stackNodes[stackIndex].m_NodeIndex = nodeIndex1;
+              stackNodes[stackIndex].m_InStart = inStartLocal;
+              stackNodes[stackIndex].m_InEnd = inEndLocal1;
+              stackNodes[stackIndex].m_CoStart = coStartLocal;
+              stackNodes[stackIndex].m_CoEnd = coEndLocal1;
+              ++stackIndex;
+            }
+          } else if(inStartLocal < inEndLocal1 || coStartLocal < coEndLocal1) 
+          {
+            curStackNode.m_Index = innerNodeInd;
+            curStackNode.m_Size = sz1;
+            curStackNode.m_NodeIndex = nodeIndex1;
+            curStackNode.m_InStart = inStartLocal;
+            curStackNode.m_InEnd = inEndLocal1;
+            curStackNode.m_CoStart = coStartLocal;
+            curStackNode.m_CoEnd = coEndLocal1;
+          } else {
+            if(stackIndex == 0)
+              break;
+            curStackNode = stackNodes[--stackIndex];
+            continue;
+          }          
+
+      } // End of else branch
+      }
+
+    } // End main "recursion" loop
+
+    m_DebugVisitCount += visitCount;
+  } // End of Search function
+
+  void SearchOld(
       IndexType index,
       unsigned int inwardsStart, unsigned int complementStart) const
   {
@@ -859,6 +1135,6 @@ private:
     } // End main "recursion" loop
 
     m_DebugVisitCount += visitCount;
-  } // End of Search function
+  } // End of SearchOld function
 
 }; // End of class
