@@ -1,11 +1,23 @@
 
+/**
+ * Implementation of a Monte Carlo framework (insert reference here) for computing the fuzzy alpha-cut-based point-to-set distance
+ * ("Linear time distances between fuzzy sets with applications to pattern matching and classification",
+ * by J. Lindblad and N. Sladoje, IEEE Transactions on Image Processing, 2013).
+ *
+ * Author: Johan Ofverstedt
+ */
+
 #include <itkImage.h>
-#include <itkArray.h>
 #include <itkNearestNeighborInterpolateImageFunction.h>
 #include <cmath>
 #include <algorithm>
 
 #include "samplers.h"
+
+// A namespace collecting auxilliary data-structures and functions
+// used by the Monte Carlo distance framework.
+
+namespace MCDSInternal {
 
 template <unsigned int Dim>
 struct ValuedCornerPoints;
@@ -273,8 +285,38 @@ unsigned int PruneLevelsBinary(const std::vector<T>& values, unsigned int start,
   return end;
 }
 
+};
+
+//
+// Evaluation context containing the auxilliary data-structures required
+// to sample intensity values and compute the value and gradient in
+// the Monte Carlo framework.
+//
+// In a multi-threaded scenario, each thread must command its own
+// private eval context.
+//
 template <typename ImageType, typename SamplerType>
-class MCDS
+class MCDSEvalContext {
+  static constexpr unsigned int ImageDimension = ImageType::ImageDimension;
+
+  typedef typename ImageType::Pointer ImagePointer;
+  typedef typename ImageType::RegionType RegionType;
+  typedef typename ImageType::SizeType SizeType;
+  typedef typename ImageType::IndexValueType IndexValueType;
+  typedef typename ImageType::SizeValueType SizeValueType;
+  typedef typename ImageType::IndexType IndexType;
+  typedef typename itk::ContinuousIndex<double, ImageType::ImageDimension> ContinousIndexType;
+  typedef typename ImageType::SpacingType SpacingType;
+  typedef typename ImageType::ValueType ValueType;
+  typedef itk::Vector<ValueType, 2U> NodeValueType;
+  typedef typename ImageType::PointType PointType;
+
+
+
+};
+
+template <typename ImageType, typename SamplerType>
+class MCAlphaCutPointToSetDistance
 {
 public:
   static constexpr unsigned int ImageDimension = ImageType::ImageDimension;
@@ -296,7 +338,9 @@ public:
   typedef itk::NearestNeighborInterpolateImageFunction<MaskImageType, double> InterpolatorType;
   typedef typename InterpolatorType::Pointer InterpolatorPointer;
 
-  typedef CornerPoints<IndexValueType, ImageType::ImageDimension> CornersType;
+  typedef MCDSInternal::CornerPoints<IndexValueType, ImageType::ImageDimension> CornersType;
+  
+  typedef MCDSEvalContext<ImageType, SamplerType> EvalContextType;
 
   void SetImage(ImagePointer image)
   {
@@ -336,24 +380,17 @@ public:
       }
     }
 
-    m_Height = 1;
-    for (unsigned int i = 0; i < dim; ++i)
-    {
-      unsigned int logsz = (unsigned int)ceil(log2((double)sz[i]));
-      m_Height += logsz;
-    }
-
-    unsigned int nodeCount = MaxNodeIndex<IndexType, SizeType, ImageDimension>(region.GetIndex(), sz, 1);
+    unsigned int nodeCount = MCDSInternal::MaxNodeIndex<IndexType, SizeType, ImageDimension>(region.GetIndex(), sz, 1);
     m_Array = std::move(std::unique_ptr<NodeValueType[]>(new NodeValueType[nodeCount]));
 
     m_Samples.reserve(m_SampleCount);
     m_InwardsValues.reserve(m_SampleCount);
     m_ComplementValues.reserve(m_SampleCount);
 
-    if(PixelCount(sz) > 0)
+    if(MCDSInternal::PixelCount(sz) > 0)
       BuildTreeRec(1, region.GetIndex(), sz);
 
-    m_Corners = ComputeCorners<IndexValueType, ImageType::ImageDimension>();
+    m_Corners = MCDSInternal::ComputeCorners<IndexValueType, ImageType::ImageDimension>();
 
     m_DebugVisitCount = 0;
 
@@ -473,7 +510,7 @@ public:
 
       Search(pntIndex, inwardsStart, complementStart);
 
-      ValuedCornerPoints<ImageDimension> cornerValues;
+      MCDSInternal::ValuedCornerPoints<ImageDimension> cornerValues;
 
       for(unsigned int i = 0; i < CornersType::size; ++i) {
         cornerValues.m_Values[i] = 0.0;
@@ -486,7 +523,7 @@ public:
         cornerValues.m_Values[i] = cornerValues.m_Values[i] / m_SampleCount;
       }
 
-      valueOut = InterpolateDistances<ImageDimension>(frac, cornerValues, gradOut);
+      valueOut = MCDSInternal::InterpolateDistances<ImageDimension>(frac, cornerValues, gradOut);
 
       // Apply spacing to gradient
       typedef typename ImageType::SpacingType SpacingType;
@@ -509,7 +546,6 @@ private:
   MaskImagePointer m_MaskImage;
   InterpolatorPointer m_MaskInterpolator;
   std::unique_ptr<NodeValueType[]> m_Array;
-  unsigned int m_Height;
   unsigned int m_SampleCount;
   ValueType m_One;
   double m_MaxDistance;
@@ -538,7 +574,7 @@ private:
     typedef itk::ImageRegionConstIterator<ImageType> IteratorType;
     NodeValueType* data = m_Array.get();
 
-    unsigned int szCount = PixelCount<dim>(sz);
+    unsigned int szCount = MCDSInternal::PixelCount<dim>(sz);
 
     if (szCount == 1U)
     {
@@ -560,7 +596,7 @@ private:
     else
     {
       IndexType midIndex = index;
-      unsigned int selIndex = LargestDimension<dim>(sz);
+      unsigned int selIndex = MCDSInternal::LargestDimension<dim>(sz);
       unsigned int maxSz = sz[selIndex];
 
       midIndex[selIndex] = midIndex[selIndex] + maxSz / 2;
@@ -661,8 +697,8 @@ private:
 
       // Eliminate inwards values
       
-      coEndLocal = PruneLevelsLinear(complementValues, coStartLocal, coEndLocal, nv[1]);
-      inEndLocal = PruneLevelsLinear(inwardsValues, inStartLocal, inEndLocal, nv[0]);
+      coEndLocal = MCDSInternal::PruneLevelsLinear(complementValues, coStartLocal, coEndLocal, nv[1]);
+      inEndLocal = MCDSInternal::PruneLevelsLinear(inwardsValues, inStartLocal, inEndLocal, nv[0]);
 
       if(inStartLocal==inEndLocal && coStartLocal == coEndLocal) {
         if(stackIndex == 0)
@@ -719,7 +755,7 @@ private:
         // Compute lower bound on distance for all pixels in the node
         IndexType innerNodeInd = curStackNode.m_Index;
         SizeType innerNodeSz = curStackNode.m_Size;
-        double lowerBoundDistance = LowerBoundDistance<IndexType, SizeType, dim>(index, innerNodeInd, innerNodeSz, spacing);
+        double lowerBoundDistance = MCDSInternal::LowerBoundDistance<IndexType, SizeType, dim>(index, innerNodeInd, innerNodeSz, spacing);
 
         // --- Approximation starts here ---
         constexpr double threshold = 20.0;
@@ -757,7 +793,7 @@ private:
         }
 
         IndexType midIndex = innerNodeInd;
-        unsigned int selIndex = LargestDimension<dim>(innerNodeSz);
+        unsigned int selIndex = MCDSInternal::LargestDimension<dim>(innerNodeSz);
         unsigned int maxSz = innerNodeSz[selIndex];
         unsigned int halfMaxSz = maxSz / 2;
 

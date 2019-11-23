@@ -9,7 +9,7 @@
 //#include "metric/mcds5.h"
 //#include "metric/mcds6.h"
 //#include "metric/mcds7.h"
-#include "metric/mcds8.h"
+#include "metric/mcAlphaCutPointToSetDistance.h"
 #include "metric/samplers.h"
 
 #include "itkPNGImageIOFactory.h"
@@ -20,6 +20,95 @@ void RegisterIOFactories() {
     itk::NiftiImageIOFactory::RegisterOneFactory();
 }
 
+template <typename T>
+void PrintTestCase(std::string name, const T& expected, const T& actual) {
+    std::cout << name << " - " << "<Expected> := " << expected << ", <Actual> := " << actual << std::endl; 
+}
+
+void RunUnitTest1() {
+    typedef float ValueType;
+    typedef itk::IPT<ValueType, 2U> IPT;
+
+    typedef itk::Image<ValueType, 2U> ImageType;
+    typedef typename ImageType::Pointer ImagePointer;
+
+    typedef MCAlphaCutPointToSetDistance<ImageType, QMCSampler<1U> > MCDSType;
+
+    typedef typename ImageType::IndexType IndexType;
+    typedef typename ImageType::SizeType SizeType;
+
+    SizeType sz;
+
+    sz[0] = 64;
+    sz[1] = 64;
+
+    ImagePointer image = IPT::ConstantImage(0.0f, sz);
+
+    // Fill a rectangular region with 1.0f
+    IndexType ind;
+    for (unsigned int i = 5; i < 12; ++i)
+    {
+        for(unsigned int j = 7; j < 15; ++j)
+        {
+            ind[0] = j;
+            ind[1] = i;
+            image->SetPixel(ind, 1.0f);
+        }
+    }
+    
+    MCDSType measure;
+    measure.SetImage(image);
+    measure.SetMaxDistance(0.0f);
+    measure.SetOne(1.0f);
+    measure.SetSampleCount(5);
+
+    measure.Initialize();
+
+    // Outside measurements
+
+    itk::Point<double, 2U> curPoint;
+    curPoint[0] = 8.5;
+    curPoint[1] = 3.4;
+    float hcur = 1.0f;
+    double value;
+    itk::Vector<double, 2U> grad;
+
+    measure.ValueAndDerivative(curPoint, hcur, value, grad);
+
+    double valueExpected = 1.6;
+    itk::Vector<double, 2U> gradExpected;
+    gradExpected[0] = 0.0;
+    gradExpected[1] = -1.0;
+    PrintTestCase("Value", valueExpected, value);
+    PrintTestCase("Grad ", gradExpected, grad);
+
+    curPoint[0] = 17.0;
+    curPoint[1] = 6.0;
+
+    measure.ValueAndDerivative(curPoint, hcur, value, grad);
+
+    valueExpected = 3.0;
+    gradExpected[0] = 1.0;
+    gradExpected[1] = 0.0;
+    PrintTestCase("Value", valueExpected, value);
+    PrintTestCase("Grad ", gradExpected, grad);
+
+    // Inside measurements
+
+    curPoint[0] = 8.0;
+    curPoint[1] = 6.0;
+    hcur = 0.0f;
+
+    measure.ValueAndDerivative(curPoint, hcur, value, grad);
+
+    valueExpected = 2.0;
+    gradExpected[0] = 1.0;
+    gradExpected[1] = 0.0;
+    PrintTestCase("Value", valueExpected, value);
+    PrintTestCase("Grad ", gradExpected, grad);
+
+}
+
 template <unsigned int Dim>
 void DoTest(int argc, char** argv) {
     typedef float ValueType;
@@ -28,8 +117,7 @@ void DoTest(int argc, char** argv) {
     typedef itk::Image<ValueType, Dim> ImageType;
     typedef typename ImageType::Pointer ImagePointer;
 
-    //typedef MCDS<ImageType, RandomSampler> MCDSType;
-    typedef MCDS<ImageType, QMCSampler<1U> > MCDSType;
+    typedef MCAlphaCutPointToSetDistance<ImageType, QMCSampler<1U> > MCDSType;
 
     RegisterIOFactories();
 
@@ -130,7 +218,10 @@ void DoTest(int argc, char** argv) {
 
 int main(int argc, char** argv) {
     int dim = atoi(argv[1]);
-    if(dim == 2) {
+    if(dim == 0) {
+        // Run unit tests
+        RunUnitTest1();
+    } else if(dim == 2) {
         DoTest<2U>(argc, argv);
     } else if(dim == 3) {
         DoTest<3U>(argc, argv);
