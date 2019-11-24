@@ -6,7 +6,6 @@
 #include "itkPoint.h"
 #include "itkImage.h"
 #include "itkSmartPointer.h"
-#include "itkImageRegionIterator.h"
 #include "itkNumericTraits.h"
 #include "itkMersenneTwisterRandomVariateGenerator.h"
 
