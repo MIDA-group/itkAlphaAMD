@@ -13,7 +13,8 @@
 #include "itkImageRegionConstIterator.h"
 #include "itkMersenneTwisterRandomVariateGenerator.h"
 #include "itkGradientMagnitudeImageFilter.h"
-#include "itkGradientMagnitudeRecursiveGaussianImageFilter.h"
+#include "itkDiscreteGaussianImageFilter.h"
+//#include "itkGradientMagnitudeRecursiveGaussianImageFilter.h"
 #include "quasiRandomGenerator.h"
 
 template <typename ImageType, typename WeightImageType=ImageType>
@@ -390,7 +391,7 @@ protected:
 }; // End of class QuasiRandomPointSampler
 
 // Gradient-importance weighted random point sampler
-
+// Method discussed: A Scalable Asynchronous Distributed Algorithm for Topic Modeling, Hsiang-Fu Yu et. al, 2014.
 template <typename ImageType, typename MaskImageType, typename WeightImageType=ImageType>
 class GradientWeightedPointSampler : public PointSamplerBase<ImageType, MaskImageType, WeightImageType> {
 public:
@@ -436,14 +437,31 @@ public:
     virtual void Initialize() {
         Superclass::Initialize();
 
+        ImagePointer im = Superclass::m_Image;
+
+        if(m_Sigma > 0.0) {
+            typedef itk::DiscreteGaussianImageFilter<
+                ImageType, ImageType>
+                GaussianFilterType;
+
+            // Create and setup a Gaussian filter
+            typename GaussianFilterType::Pointer gaussianFilter = GaussianFilterType::New();
+            gaussianFilter->SetInput(im);
+	        gaussianFilter->SetUseImageSpacingOn();
+            gaussianFilter->SetMaximumKernelWidth(128);
+            gaussianFilter->SetVariance(m_Sigma * m_Sigma);
+            gaussianFilter->Update();
+
+            im = gaussianFilter->GetOutput();
+        }
+
         // Compute the gradient magnitude image and generate a sparse list of cumulative probabilities
         //typedef itk::GradientMagnitudeRecursiveGaussianImageFilter<ImageType, ImageType> FilterType;
         typedef itk::GradientMagnitudeImageFilter<ImageType, ImageType> FilterType;
 
         typename FilterType::Pointer filter = FilterType::New();
-        //filter->SetSigma(m_Sigma);
 
-        filter->SetInput(Superclass::m_Image);
+        filter->SetInput(im);
         
         filter->Update();
 

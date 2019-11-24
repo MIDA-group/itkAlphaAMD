@@ -45,7 +45,7 @@ void RunSamplerTest(typename PointSamplerBase<itk::Image<float, 2U>, itk::Image<
     typedef PointSample<itk::Image<float, 2U>, itk::Image<float, 2U> > PointSampleType;
     std::vector<PointSampleType> samples;
 
-    unsigned int count = 256U;
+    unsigned int count = 64U;
     sampler->Sample(samples, count, 1);
     double valacc = 0.0;
     for(unsigned int i = 0; i < count; ++i) {
@@ -87,7 +87,7 @@ void RunGradientWeightedPointSampler(ImagePointer image) {
 
     SamplerPointer sampler = SamplerType::New();
     sampler->SetImage(image);
-    sampler->SetSigma(0.0001);
+    sampler->SetSigma(1.0);
 
     sampler->Initialize();
 
