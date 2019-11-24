@@ -112,8 +112,13 @@ inline double InterpolateDistances<2U>(itk::Vector<double, 2U> frac, ValuedCorne
   double step_01_00 = v_01 - v_00;
   double step_11_10 = v_11 - v_10;
   
-  grad[0] = iyy * step_10_00 + yy * step_11_01;
-  grad[1] = ixx * step_01_00 + xx * step_11_10;
+  //grad[0] = iyy * step_10_00 + yy * step_11_01;
+  //grad[1] = ixx * step_01_00 + xx * step_11_10;
+  //return v_00 * ixx * iyy + v_10 * xx * iyy + v_01 * ixx * yy + v_11 * xx * yy;
+  // Version that uses mid-point
+  grad[0] = (step_10_00 + step_11_01) * 0.5;
+  grad[1] = (step_01_00 + step_11_10) * 0.5;
+  
   return v_00 * ixx * iyy + v_10 * xx * iyy + v_01 * ixx * yy + v_11 * xx * yy;
 }
 
@@ -168,9 +173,14 @@ inline double InterpolateDistances<3U>(itk::Vector<double, 3U> frac, ValuedCorne
 
   */
 
-  grad[0] = ((v_100 - v_000) * iyy + (v_110 - v_010) * yy) * izz + ((v_101 - v_001) * iyy + (v_111 - v_011) * yy) * zz;
-  grad[1] = ((v_010 - v_000) * ixx + (v_110 - v_100) * xx) * izz + ((v_011 - v_001) * ixx + (v_111 - v_101) * xx) * zz;
-  grad[2] = ((v_001 - v_000) * ixx + (v_101 - v_100) * xx) * iyy + ((v_011 - v_010) * ixx + (v_111 - v_110) * xx) * yy;
+  //grad[0] = ((v_100 - v_000) * iyy + (v_110 - v_010) * yy) * izz + ((v_101 - v_001) * iyy + (v_111 - v_011) * yy) * zz;
+  //grad[1] = ((v_010 - v_000) * ixx + (v_110 - v_100) * xx) * izz + ((v_011 - v_001) * ixx + (v_111 - v_101) * xx) * zz;
+  //grad[2] = ((v_001 - v_000) * ixx + (v_101 - v_100) * xx) * iyy + ((v_011 - v_010) * ixx + (v_111 - v_110) * xx) * yy;
+
+  // Version that uses mid-point
+  grad[0] = (((v_100 - v_000) + (v_110 - v_010)) + ((v_101 - v_001) + (v_111 - v_011))) * 0.25;
+  grad[1] = (((v_010 - v_000) + (v_110 - v_100)) + ((v_011 - v_001) + (v_111 - v_101))) * 0.25;
+  grad[2] = (((v_001 - v_000) + (v_101 - v_100)) + ((v_011 - v_010) + (v_111 - v_110))) * 0.25;
   return v;
 }
 
@@ -647,8 +657,6 @@ private:
       IndexType index,
       unsigned int inwardsStart, unsigned int complementStart) const
   {
-    constexpr unsigned int dim = ImageType::ImageDimension;
-
     ValueType* inwardsValues = m_InwardsValues.data();
     ValueType* complementValues = m_ComplementValues.data();
     unsigned int inwardsCount = m_InwardsValues.size();
@@ -656,18 +664,12 @@ private:
 
     typedef typename ImageType::SpacingType SpacingType;
 
-    ImageType *image = m_Image.GetPointer();
-    SpacingType spacing = image->GetSpacing();
-    ValueType one = m_One;
+    SpacingType spacing = m_Image->GetSpacing();
 
     double* distTable = m_Table.get();
-    NodeValueType* data = m_Array.get();
+    NodeValueType* data = m_Array.get(); // Node data
 
     unsigned int sampleCount = m_SampleCount;
-
-    RegionType region = image->GetLargestPossibleRegion();
-
-    constexpr unsigned int cornerCount = CornersType::size;
 
     // Stack
     StackNode stackNodes[33];
@@ -675,8 +677,8 @@ private:
     unsigned int stackIndex = 0;
 
     // Initialize the stack state
-    curStackNode.m_Index = region.GetIndex();
-    curStackNode.m_Size = region.GetSize();
+    curStackNode.m_Index = m_Image->GetLargestPossibleRegion().GetIndex();
+    curStackNode.m_Size = m_Image->GetLargestPossibleRegion().GetSize();
     curStackNode.m_NodeIndex = 1;
     curStackNode.m_InStart = inwardsStart;
     curStackNode.m_InEnd = MCDSInternal::PruneLevelsLinear(inwardsValues, inwardsStart, inwardsCount, data[0][0]);
@@ -686,12 +688,12 @@ private:
     // All elements eliminated before entering the loop. Search is over. Return.
     if(curStackNode.m_InStart == curStackNode.m_InEnd && curStackNode.m_CoStart == curStackNode.m_CoEnd)
       return;
-
+    
     itk::FixedArray<itk::Point<double, ImageDimension>, CornersType::size> corners;
 
-    for (unsigned int i = 0; i < cornerCount; ++i)
+    for (unsigned int i = 0; i < CornersType::size; ++i)
     {
-      for (unsigned int j = 0; j < dim; ++j)
+      for (unsigned int j = 0; j < ImageDimension; ++j)
       {
         corners[i][j] = static_cast<double>(m_Corners.m_Points[i][j] + index[j]) * spacing[j];
       }
@@ -714,12 +716,13 @@ private:
       if (npx == 1U)
       {
         ++visitCount;
+
         itk::Point<double, ImageDimension> leafPoint;
         for(unsigned int j = 0; j < ImageDimension; ++j)
           leafPoint[j] = static_cast<double>(curStackNode.m_Index[j]*spacing[j]);
 
         // Compare d with all the distances recorded for the alpha levels (which are still in play)
-        for (unsigned int i = 0; i < cornerCount; ++i)
+        for (unsigned int i = 0; i < CornersType::size; ++i)
         {
           const double d = corners[i].SquaredEuclideanDistanceTo(leafPoint);
           double* distTable_i = distTable + (sampleCount * i);
@@ -749,23 +752,19 @@ private:
             }
           }
         }
-
-        if(stackIndex == 0)
-          break;
-        curStackNode = stackNodes[--stackIndex];
       }
       else
       { // Continue traversing the tree
         // Compute lower bound on distance for all pixels in the node
         IndexType innerNodeInd = curStackNode.m_Index;
         SizeType innerNodeSz = curStackNode.m_Size;
-        double lowerBoundDistance = MCDSInternal::LowerBoundDistance<IndexType, SizeType, dim>(index, innerNodeInd, innerNodeSz, spacing);
+        double lowerBoundDistance = MCDSInternal::LowerBoundDistance<IndexType, SizeType, ImageDimension>(index, innerNodeInd, innerNodeSz, spacing);
 
         // --- Approximation starts here ---
         constexpr double threshold = 20.0;
         constexpr double thresholdSq = threshold*threshold;
-        const double xponent = 1.1;
-        const double xponentSq = xponent*xponent;
+        constexpr double xponent = 1.1;
+        constexpr double xponentSq = xponent*xponent;
         if(lowerBoundDistance > thresholdSq) {
           lowerBoundDistance = (thresholdSq-1.0) + ((lowerBoundDistance-thresholdSq)+1.0) * xponentSq;
         }
@@ -799,7 +798,7 @@ private:
         }
 
         IndexType midIndex = innerNodeInd;
-        unsigned int selIndex = MCDSInternal::LargestDimension<dim>(innerNodeSz);
+        unsigned int selIndex = MCDSInternal::LargestDimension<ImageDimension>(innerNodeSz);
         unsigned int maxSz = innerNodeSz[selIndex];
         unsigned int halfMaxSz = maxSz / 2;
 
@@ -839,6 +838,7 @@ private:
               stackNodes[stackIndex].m_CoEnd = coEndLocal2;
               ++stackIndex;
             }
+            continue;
           }
           else if(inStartLocal < inEndLocal2 || coStartLocal < coEndLocal2)
           {
@@ -849,14 +849,8 @@ private:
             curStackNode.m_InEnd = inEndLocal2;
             curStackNode.m_CoStart = coStartLocal;
             curStackNode.m_CoEnd = coEndLocal2;
-          }
-          else
-          {
-            if(stackIndex == 0)
-              break;
-            curStackNode = stackNodes[--stackIndex];
             continue;
-          }          
+          }      
         }
         else
         {
@@ -880,6 +874,7 @@ private:
               stackNodes[stackIndex].m_CoEnd = coEndLocal1;
               ++stackIndex;
             }
+            continue;
           } else if(inStartLocal < inEndLocal1 || coStartLocal < coEndLocal1) 
           {
             curStackNode.m_Index = innerNodeInd;
@@ -889,252 +884,20 @@ private:
             curStackNode.m_InEnd = inEndLocal1;
             curStackNode.m_CoStart = coStartLocal;
             curStackNode.m_CoEnd = coEndLocal1;
-          } else {
-            if(stackIndex == 0)
-              break;
-            curStackNode = stackNodes[--stackIndex];
             continue;
-          }          
-
+          }       
       } // End of else branch
       }
 
+      // If we arrive here, we need to pop a stack node
+      // unless the stack is empty, which would trigger a
+      // termination of the loop.
+      if(stackIndex == 0)
+        break;
+      curStackNode = stackNodes[--stackIndex];
     } // End main "recursion" loop
 
     m_DebugVisitCount += visitCount;
   } // End of Search function
-
-  void SearchOld(
-      IndexType index,
-      unsigned int inwardsStart, unsigned int complementStart) const
-  {
-    constexpr unsigned int dim = ImageType::ImageDimension;
-
-    ValueType* inwardsValues = m_InwardsValues.data();
-    ValueType* complementValues = m_ComplementValues.data();
-    unsigned int inwardsCount = m_InwardsValues.size();
-    unsigned int complementCount = m_ComplementValues.size();
-
-    typedef typename ImageType::SpacingType SpacingType;
-
-    ImageType *image = m_Image.GetPointer();
-    SpacingType spacing = image->GetSpacing();
-    ValueType one = m_One;
-
-    double* distTable = m_Table.get();
-    NodeValueType* data = m_Array.get();
-
-    unsigned int sampleCount = m_SampleCount;
-
-    RegionType region = image->GetLargestPossibleRegion();
-
-    constexpr unsigned int cornerCount = CornersType::size;
-
-    // Stack
-    StackNode stackNodes[33];
-    StackNode curStackNode;
-    unsigned int stackIndex = 0;
-
-    // Initialize the stack state
-    curStackNode.m_Index = region.GetIndex();
-    curStackNode.m_Size = region.GetSize();
-    curStackNode.m_NodeIndex = 1;
-    curStackNode.m_InStart = inwardsStart;
-    curStackNode.m_InEnd = inwardsCount;
-    curStackNode.m_CoStart = complementStart;
-    curStackNode.m_CoEnd = complementCount;
-
-    itk::FixedArray<itk::Point<double, ImageDimension>, CornersType::size> corners;
-
-    for (unsigned int i = 0; i < cornerCount; ++i)
-    {
-      for (unsigned int j = 0; j < dim; ++j)
-      {
-        corners[i][j] = static_cast<double>(m_Corners.m_Points[i][j] + index[j]) * spacing[j];
-      }
-    }
-
-    unsigned int visitCount = 0;
-    while(true)
-    {
-      SizeType nodeSz = curStackNode.m_Size;
-      unsigned int npx = nodeSz[0];
-      for(unsigned int i = 1; i < ImageDimension; ++i) {
-        npx *= nodeSz[i];
-      }
-
-      unsigned int inStartLocal = curStackNode.m_InStart;
-      unsigned int inEndLocal = curStackNode.m_InEnd;
-      unsigned int coStartLocal = curStackNode.m_CoStart;
-      unsigned int coEndLocal = curStackNode.m_CoEnd;
-
-      unsigned int nodeIndex = curStackNode.m_NodeIndex;
-      NodeValueType nv = data[nodeIndex-1];
-
-      // Eliminate inwards values
-      
-      coEndLocal = MCDSInternal::PruneLevelsLinear(complementValues, coStartLocal, coEndLocal, nv[1]);
-      inEndLocal = MCDSInternal::PruneLevelsLinear(inwardsValues, inStartLocal, inEndLocal, nv[0]);
-
-      if(inStartLocal==inEndLocal && coStartLocal == coEndLocal) {
-        if(stackIndex == 0)
-            break;
-          curStackNode = stackNodes[--stackIndex];
-          continue;
-      }
-
-      // Is the node a leaf - compute distances
-      if (npx == 1U)
-      {
-        ++visitCount;
-        itk::Point<double, ImageDimension> leafPoint;
-        for(unsigned int j = 0; j < ImageDimension; ++j)
-          leafPoint[j] = static_cast<double>(curStackNode.m_Index[j]*spacing[j]);
-
-        // Compare d with all the distances recorded for the alpha levels (which are still in play)
-        for (unsigned int i = 0; i < cornerCount; ++i)
-        {
-          const double d = corners[i].SquaredEuclideanDistanceTo(leafPoint);
-          double* distTable_i = distTable + (sampleCount * i);
-
-          for (unsigned int j = coEndLocal; coStartLocal < j; --j)
-          {
-            unsigned int tabInd = j+inwardsCount-1;
-            double cur_j = distTable_i[tabInd];
-            if (d < cur_j)
-            {
-              distTable_i[tabInd] = d;
-            } else {
-              break;
-            }
-          }          
-
-          for (unsigned int j = inEndLocal; inStartLocal < j; --j)
-          {
-            unsigned int tabInd = j-1;
-            double cur_j = distTable_i[tabInd];
-            if (d < cur_j)
-            {
-              distTable_i[tabInd] = d;
-            } else {
-              break;
-            }
-          }
-        }
-
-        if(stackIndex == 0)
-          break;
-        curStackNode = stackNodes[--stackIndex];
-      }
-      else
-      { // Continue traversing the tree
-        // Compute lower bound on distance for all pixels in the node
-        IndexType innerNodeInd = curStackNode.m_Index;
-        SizeType innerNodeSz = curStackNode.m_Size;
-        double lowerBoundDistance = MCDSInternal::LowerBoundDistance<IndexType, SizeType, dim>(index, innerNodeInd, innerNodeSz, spacing);
-
-        // --- Approximation starts here ---
-        constexpr double threshold = 20.0;
-        constexpr double thresholdSq = threshold*threshold;
-        const double xponent = 1.1;
-        const double xponentSq = xponent*xponent;
-        if(lowerBoundDistance > thresholdSq) {
-          lowerBoundDistance = (thresholdSq-1.0) + ((lowerBoundDistance-thresholdSq)+1.0) * xponentSq;
-        }
-        // --- Approximation ends here ---
-
-        // Eliminate inwards values based on distance bounds
-        for (; inStartLocal < inEndLocal; ++inStartLocal)
-        {
-          double cur_j = distTable[inStartLocal];
-          if (lowerBoundDistance <= cur_j)
-            break;
-        }
-
-        // Eliminate complement values based on distance bounds
-        for (; coStartLocal < coEndLocal; ++coStartLocal)
-        {
-          double cur_j = distTable[coStartLocal+inwardsCount];
-          if (lowerBoundDistance <= cur_j)
-            break;
-        }
-
-        // If all alpha levels are eliminated, backtrack...
-        if (inStartLocal == inEndLocal && coStartLocal == coEndLocal)
-        {
-          if(stackIndex == 0)
-            break;
-          curStackNode = stackNodes[--stackIndex];
-          continue;
-        }
-
-        IndexType midIndex = innerNodeInd;
-        unsigned int selIndex = MCDSInternal::LargestDimension<dim>(innerNodeSz);
-        unsigned int maxSz = innerNodeSz[selIndex];
-        unsigned int halfMaxSz = maxSz / 2;
-
-        midIndex[selIndex] = midIndex[selIndex] + halfMaxSz;
-        SizeType sz1 = innerNodeSz;
-        SizeType sz2 = innerNodeSz;
-
-        sz1[selIndex] = halfMaxSz;
-        sz2[selIndex] = maxSz - halfMaxSz;
-
-        unsigned int nodeIndex1 = nodeIndex * 2;
-        unsigned int nodeIndex2 = nodeIndex1 + 1;
-
-        if (index[selIndex] < midIndex[selIndex])
-        {
-          if((inStartLocal >= inEndLocal || data[nodeIndex2-1][0] < inwardsValues[inStartLocal]) && (coStartLocal >= coEndLocal || data[nodeIndex2-1][1] < complementValues[coStartLocal])) {
-            ;
-          } else
-          {
-          stackNodes[stackIndex].m_Index = midIndex;
-          stackNodes[stackIndex].m_Size = sz2;
-          stackNodes[stackIndex].m_NodeIndex = nodeIndex2;
-          stackNodes[stackIndex].m_InStart = inStartLocal;
-          stackNodes[stackIndex].m_InEnd = inEndLocal;
-          stackNodes[stackIndex].m_CoStart = coStartLocal;
-          stackNodes[stackIndex].m_CoEnd = coEndLocal;
-          ++stackIndex;
-          }
-          curStackNode.m_Index = innerNodeInd;
-          curStackNode.m_Size = sz1;
-          curStackNode.m_NodeIndex = nodeIndex1;
-          curStackNode.m_InStart = inStartLocal;
-          curStackNode.m_InEnd = inEndLocal;
-          curStackNode.m_CoStart = coStartLocal;
-          curStackNode.m_CoEnd = coEndLocal;
-        }
-        else
-        {
-          if((inStartLocal >= inEndLocal || data[nodeIndex1-1][0] < inwardsValues[inStartLocal]) && (coStartLocal >= coEndLocal || data[nodeIndex1-1][1] < complementValues[coStartLocal])) {
-            ;
-          } else
-          {
-          stackNodes[stackIndex].m_Index = innerNodeInd;
-          stackNodes[stackIndex].m_Size = sz1;
-          stackNodes[stackIndex].m_NodeIndex = nodeIndex1;
-          stackNodes[stackIndex].m_InStart = inStartLocal;
-          stackNodes[stackIndex].m_InEnd = inEndLocal;
-          stackNodes[stackIndex].m_CoStart = coStartLocal;
-          stackNodes[stackIndex].m_CoEnd = coEndLocal;
-          ++stackIndex;
-          }
-          curStackNode.m_Index = midIndex;
-          curStackNode.m_Size = sz2;
-          curStackNode.m_NodeIndex = nodeIndex2;
-          curStackNode.m_InStart = inStartLocal;
-          curStackNode.m_InEnd = inEndLocal;
-          curStackNode.m_CoStart = coStartLocal;
-          curStackNode.m_CoEnd = coEndLocal;
-        }
-
-      } // End of else branch
-
-    } // End main "recursion" loop
-
-    m_DebugVisitCount += visitCount;
-  } // End of SearchOld function
 
 }; // End of class
