@@ -43,6 +43,8 @@ itk::Vector<double, 3U> MakeQuasiRandomGeneratorAlpha<3U>() {
     return result;
 }
 
+// Add the N-dimensional quasi random generator implementation
+
 template <unsigned int Dim>
 class QuasiRandomGenerator : public itk::Object {
 public:
