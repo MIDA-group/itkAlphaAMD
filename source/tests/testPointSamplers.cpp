@@ -97,8 +97,8 @@ void RunGradientWeightedPointSampler(ImagePointer image) {
 void RunPointSamplersTests() {
     ImagePointer image = MakeTestImage();
 
-    //RunUniformPointSampler(image);
-    //RunQuasiRandomPointSampler(image);
+    RunUniformPointSampler(image);
+    RunQuasiRandomPointSampler(image);
     RunGradientWeightedPointSampler(image);
 }
 };
