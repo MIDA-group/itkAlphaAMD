@@ -12,6 +12,7 @@
 #include "itkImage.h"
 #include "itkImageRegionConstIterator.h"
 #include "itkMersenneTwisterRandomVariateGenerator.h"
+#include "itkGradientMagnitudeImageFilter.h"
 #include "itkGradientMagnitudeRecursiveGaussianImageFilter.h"
 #include "quasiRandomGenerator.h"
 
@@ -31,8 +32,8 @@ class PointSamplerBase : public itk::Object {
 public:
     using Self = PointSamplerBase;
     using Superclass = itk::Object;
-    using Pointer = SmartPointer<Self>;
-    using ConstPointer = SmartPointer<const Self>;
+    using Pointer = itk::SmartPointer<Self>;
+    using ConstPointer = itk::SmartPointer<const Self>;
     
     typedef typename ImageType::Pointer ImagePointer;
     typedef typename MaskImageType::Pointer MaskImagePointer;
@@ -47,6 +48,7 @@ public:
     typedef typename ImageType::IndexType IndexType;
     typedef typename ImageType::SizeType SizeType;
     typedef typename ImageType::IndexValueType IndexValueType;
+    typedef typename ImageType::PointType PointType;
 
     typedef itk::Statistics::MersenneTwisterRandomVariateGenerator GeneratorType;
     typedef typename GeneratorType::Pointer GeneratorPointer;
@@ -67,9 +69,13 @@ public:
         m_MaskRawPtr = mask.GetPointer();
     }
 
-    virtual void SetWeightImage(WeightImageType weights) {
+    virtual void SetWeightImage(WeightImagePointer weights) {
         m_Weights = weights;
         m_WeightsRawPtr = weights.GetPointer();
+    }
+
+    virtual unsigned long long GetSeed() const {
+        return m_Seed;
     }
 
     virtual void SetSeed(unsigned long long seed) {
@@ -104,8 +110,12 @@ public:
 protected:
     PointSamplerBase() {
         m_Seed = 42U;
+        m_ImageRawPtr = nullptr;
+        m_MaskRawPtr = nullptr;
+        m_WeightsRawPtr = nullptr;
         m_DitheringGenerator = GeneratorType::New();
-        m_DitheringGenerator->SetSeed(m_Seed);        
+        m_DitheringGenerator->SetSeed(m_Seed);
+        m_Dithering = false;
     }
     virtual ~PointSamplerBase() {
 
@@ -137,10 +147,10 @@ protected:
             IndexType minIndex;
             IndexType maxIndex;
             minIndex.Fill(itk::NumericTraits<IndexValueType>::max());
-            maxIndex.Fill(itk::NumericTraits<IndexValueType>::min())
+            maxIndex.Fill(itk::NumericTraits<IndexValueType>::min());
 
-            typename itk::ImageRegionConstIterator<MaskImageType> IteratorType;
-            IteratorType it(m_MaskRawPtr->GetLargestPossibleRegion(), m_MaskRawPtr);
+            typedef itk::ImageRegionConstIterator<MaskImageType> IteratorType;
+            IteratorType it(m_MaskRawPtr, m_MaskRawPtr->GetLargestPossibleRegion());
 
             it.GoToBegin();
             while(!it.IsAtEnd()) {
@@ -175,7 +185,7 @@ protected:
     WeightImagePointer m_Weights;
 
     ImageType* m_ImageRawPtr;
-    MaskImage* m_MaskRawPtr;
+    MaskImageType* m_MaskRawPtr;
     WeightImageType* m_WeightsRawPtr;
 
     mutable GeneratorPointer m_DitheringGenerator;
@@ -195,8 +205,8 @@ class UniformPointSampler : public PointSamplerBase<ImageType, MaskImageType, We
 public:
     using Self = UniformPointSampler;
     using Superclass = PointSamplerBase<ImageType, MaskImageType, WeightImageType>;
-    using Pointer = SmartPointer<Self>;
-    using ConstPointer = SmartPointer<const Self>;
+    using Pointer = itk::SmartPointer<Self>;
+    using ConstPointer = itk::SmartPointer<const Self>;
     
     typedef typename ImageType::Pointer ImagePointer;
     typedef typename MaskImageType::Pointer MaskImagePointer;
@@ -221,10 +231,10 @@ public:
     itkTypeMacro(UniformPointSampler, PointSamplerBase);
 
     virtual void RestartFromSeed() {
-        PointSamplerBase::RestartFromSeed();
+        Superclass::RestartFromSeed();
 
         // Use a different seed from the dithering seed using an arbitrary factor and offset
-        m_RNG->SetSeed(m_Seed*2U+13U);
+        m_RNG->SetSeed(Superclass::GetSeed()*2U+13U);
     }
 
     virtual void Sample(PointSampleType& pointSampleOut, unsigned int attempts = 1)
@@ -232,27 +242,35 @@ public:
         IndexType index;
 
         GeneratorType* gen = m_RNG.GetPointer();
-        ImageType* image = m_ImageRawPtr;
-        MaskImageType* mask = m_MaskRawPtr;
-        WeightImageType* weights = m_WeightsRawPtr;
+        ImageType* image = Superclass::m_ImageRawPtr;
+        MaskImageType* mask = Superclass::m_MaskRawPtr;
+        WeightImageType* weights = Superclass::m_WeightsRawPtr;
 
-        IndexType origin = m_BBOrigin;
-        SizeType size = m_BBSize;
+        IndexType origin = Superclass::m_BBOrigin;
+        SizeType size = Superclass::m_BBSize;
 
         for(unsigned int i = 0; i < ImageType::ImageDimension; ++i) {
-            index[i] = origin[i] + gen->GetIntegerVariate(size[i]) - 1;
+            if(size[i] > 0U)
+            {
+                unsigned int step = (gen->GetIntegerVariate() % size[i]);
+                index[i] = origin[i] + step;
+            }
+            else
+                index[i] = origin[i];
         }
 
-        bool isMasked = PerformMaskTest(index);
+        bool isMasked = Superclass::PerformMaskTest(index);
         if(!isMasked) {
             if(attempts > 0) {
                 Sample(pointSampleOut, attempts - 1U);
                 return;
             }
 
-            pointSampleOut.m_Weight = itk::NumericTraits<WeightValueType>::Zero();
+            pointSampleOut.m_Weight = itk::NumericTraits<WeightValueType>::ZeroValue();
             return;
         }
+
+        pointSampleOut.m_Value = Superclass::m_ImageRawPtr->GetPixel(index);
 
         image->TransformIndexToPhysicalPoint(index, pointSampleOut.m_Point);
 
@@ -262,15 +280,15 @@ public:
         }
         else
         {
-            pointSampleOut.m_Weight = itk::NumericTraits<WeightValueType>::One();
+            pointSampleOut.m_Weight = itk::NumericTraits<WeightValueType>::OneValue();
         }
 
-        DitherPoint(pointSampleOut.m_Point);
+        Superclass::DitherPoint(pointSampleOut.m_Point);
     }
 protected:
     UniformPointSampler() {
         m_RNG = GeneratorType::New();
-        m_RNG->SetSeed(m_Seed*2U+13U);
+        m_RNG->SetSeed(Superclass::GetSeed()*2U+13U);
     }
     GeneratorPointer m_RNG;
 }; // End of class UniformPointSampler
@@ -282,8 +300,8 @@ class QuasiRandomPointSampler : public PointSamplerBase<ImageType, MaskImageType
 public:
     using Self = QuasiRandomPointSampler;
     using Superclass = PointSamplerBase<ImageType, MaskImageType, WeightImageType>;
-    using Pointer = SmartPointer<Self>;
-    using ConstPointer = SmartPointer<const Self>;
+    using Pointer = itk::SmartPointer<Self>;
+    using ConstPointer = itk::SmartPointer<const Self>;
     
     typedef typename ImageType::Pointer ImagePointer;
     typedef typename MaskImageType::Pointer MaskImagePointer;
@@ -297,12 +315,13 @@ public:
     typedef typename ImageType::RegionType RegionType;
     typedef typename ImageType::IndexType IndexType;
     typedef typename ImageType::SizeType SizeType;
+    typedef typename ImageType::IndexValueType IndexValueType;
 
     typedef itk::Statistics::MersenneTwisterRandomVariateGenerator GeneratorType;
     typedef typename GeneratorType::Pointer GeneratorPointer;
     
     typedef QuasiRandomGenerator<ImageType::ImageDimension> QRGeneratorType;
-    typedef QRGeneratorType::Pointer QRGeneratorPointer;
+    typedef typename QRGeneratorType::Pointer QRGeneratorPointer;
 
     typedef PointSample<ImageType, WeightImageType> PointSampleType;
 
@@ -311,10 +330,10 @@ public:
     itkTypeMacro(PointSamplerBase, itk::Object);
 
     virtual void RestartFromSeed() {
-        PointSamplerBase::RestartFromSeed();
+        Superclass::RestartFromSeed();
 
         // Use a different seed from the dithering seed using an arbitrary factor and offset
-        m_QRGenerator->SetSeed(m_Seed*2U+13U);
+        m_QRGenerator->SetSeed(Superclass::GetSeed()*2U+13U);
         m_QRGenerator->Restart();
     }
 
@@ -323,28 +342,30 @@ public:
         IndexType index;
 
         QRGeneratorType* gen = m_QRGenerator.GetPointer();
-        ImageType* image = m_ImageRawPtr;
-        MaskImageType* mask = m_MaskRawPtr;
-        WeightImageType* weights = m_WeightsRawPtr;
+        ImageType* image = Superclass::m_ImageRawPtr;
+        MaskImageType* mask = Superclass::m_MaskRawPtr;
+        WeightImageType* weights = Superclass::m_WeightsRawPtr;
 
-        IndexType origin = m_BBOrigin;
-        SizeType size = m_BBSize;
+        IndexType origin = Superclass::m_BBOrigin;
+        SizeType size = Superclass::m_BBSize;
 
         itk::Vector<double, ImageType::ImageDimension> v = gen->GetVariate();
         for(unsigned int i = 0; i < ImageType::ImageDimension; ++i) {
             index[i] = origin[i] + (IndexValueType)(v[i] * size[i]);
         }
 
-        bool isMasked = PerformMaskTest(index);
+        bool isMasked = Superclass::PerformMaskTest(index);
         if(!isMasked) {
             if(attempts > 0) {
                 Sample(pointSampleOut, attempts - 1U);
                 return;
             }
 
-            pointSampleOut.m_Weight = itk::NumericTraits<WeightValueType>::Zero();
+            pointSampleOut.m_Weight = itk::NumericTraits<WeightValueType>::ZeroValue();
             return;
         }
+
+        pointSampleOut.m_Value = Superclass::m_ImageRawPtr->GetPixel(index);
 
         image->TransformIndexToPhysicalPoint(index, pointSampleOut.m_Point);
 
@@ -354,15 +375,15 @@ public:
         }
         else
         {
-            pointSampleOut.m_Weight = itk::NumericTraits<WeightValueType>::One();
+            pointSampleOut.m_Weight = itk::NumericTraits<WeightValueType>::OneValue();
         }
 
-        DitherPoint(pointSampleOut.m_Point);
+        Superclass::DitherPoint(pointSampleOut.m_Point);
     }
 protected:
     QuasiRandomPointSampler() {
         m_QRGenerator = QRGeneratorType::New();
-        m_QRGenerator->SetSeed(2U*m_Seed + 13U);
+        m_QRGenerator->SetSeed(2U*Superclass::GetSeed() + 13U);
     }
 
     mutable QRGeneratorPointer m_QRGenerator;
@@ -375,8 +396,8 @@ class GradientWeightedPointSampler : public PointSamplerBase<ImageType, MaskImag
 public:
     using Self = GradientWeightedPointSampler;
     using Superclass = PointSamplerBase<ImageType, MaskImageType, WeightImageType>;
-    using Pointer = SmartPointer<Self>;
-    using ConstPointer = SmartPointer<const Self>;
+    using Pointer = itk::SmartPointer<Self>;
+    using ConstPointer = itk::SmartPointer<const Self>;
     
     typedef typename ImageType::Pointer ImagePointer;
     typedef typename MaskImageType::Pointer MaskImagePointer;
@@ -390,6 +411,7 @@ public:
     typedef typename ImageType::RegionType RegionType;
     typedef typename ImageType::IndexType IndexType;
     typedef typename ImageType::SizeType SizeType;
+    typedef typename ImageType::IndexValueType IndexValueType;
 
     typedef itk::Statistics::MersenneTwisterRandomVariateGenerator GeneratorType;
     typedef typename GeneratorType::Pointer GeneratorPointer;
@@ -401,10 +423,10 @@ public:
     itkTypeMacro(GradientWeightedPointSampler, PointSamplerBase);
 
     virtual void RestartFromSeed() {
-        PointSamplerBase::RestartFromSeed();
+        Superclass::RestartFromSeed();
 
         // Use a different seed from the dithering seed using an arbitrary factor and offset
-        m_RNG->SetSeed(m_Seed*2U+13U);
+        m_RNG->SetSeed(Superclass::GetSeed()*2U+13U);
     }
 
     virtual void SetSigma(double sigma) {
@@ -412,40 +434,43 @@ public:
     }
 
     virtual void Initialize() {
-        PointSamplerBase::Initialize();
+        Superclass::Initialize();
 
         // Compute the gradient magnitude image and generate a sparse list of cumulative probabilities
-        typedef itk::GradientMagnitudeRecursiveGaussianImageFilter<ImageType, ImageType> FilterType;
+        //typedef itk::GradientMagnitudeRecursiveGaussianImageFilter<ImageType, ImageType> FilterType;
+        typedef itk::GradientMagnitudeImageFilter<ImageType, ImageType> FilterType;
 
         typename FilterType::Pointer filter = FilterType::New();
-        filter->SetSigma(m_Sigma);
+        //filter->SetSigma(m_Sigma);
 
-        filter->SetInput(m_Image);
+        filter->SetInput(Superclass::m_Image);
         
         filter->Update();
 
         ImagePointer gradIm = filter->GetOutput();
 
-        typename itk::ImageRegionConstIterator<ImageType> IteratorType;
-        typename itk::ImageRegionConstIterator<ImageType> MaskIteratorType;
-        IteratorType it(m_ImageRawPtr->GetLargestPossibleRegion(), m_ImageRawPtr);
-        MaskIteratorType itMask(m_MaskRawPtr->GetLargestPossibleRegion(), m_MaskRawPtr);
+        typedef itk::ImageRegionConstIterator<ImageType> IteratorType;
+        typedef itk::ImageRegionConstIterator<MaskImageType> MaskIteratorType;
 
         m_Prob.clear();
         m_Indices.clear();
 
-        it.GoToBegin();
-        itMask.GoToBegin();
-
         double totalValue = 0.0;
 
+        if(Superclass::m_MaskRawPtr) {
+        IteratorType it(gradIm, gradIm->GetLargestPossibleRegion());
+        MaskIteratorType itMask(Superclass::m_MaskRawPtr, Superclass::m_MaskRawPtr->GetLargestPossibleRegion());
+
+        it.GoToBegin();
+        itMask.GoToBegin();
+        
         while(!it.IsAtEnd() && !itMask.IsAtEnd())
         {
             if(itMask.Value())
             {
                 double value = it.Value();
 
-                if(value > 0.0)
+                if(value > 1e-15)
                 {
                     IndexType curIndex = it.GetIndex();
                     totalValue += value;
@@ -456,6 +481,27 @@ public:
             }
             ++it;
             ++itMask;
+        }
+        }
+        else
+        {
+        IteratorType it(gradIm, gradIm->GetLargestPossibleRegion());
+
+        it.GoToBegin();
+
+        while(!it.IsAtEnd())
+        {
+            double value = it.Value();
+
+            if(value > 0.0)
+            {
+                IndexType curIndex = it.GetIndex();
+                totalValue += value;
+                m_Prob.push_back(totalValue);
+                m_Indices.push_back(curIndex);
+            }
+            ++it;
+        }
         }
 
         if(totalValue < 1e-15)
@@ -473,13 +519,15 @@ public:
         IndexType index;
 
         GeneratorType* gen = m_RNG.GetPointer();
-        ImageType* image = m_ImageRawPtr;
-        MaskImageType* mask = m_MaskRawPtr;
-        WeightImageType* weights = m_WeightsRawPtr;
+        ImageType* image = Superclass::m_ImageRawPtr;
+        MaskImageType* mask = Superclass::m_MaskRawPtr;
+        WeightImageType* weights = Superclass::m_WeightsRawPtr;
 
-        if(m_Prob.size() == 0U)
+        if(m_Prob.size() > 0U)
         {
-            size_t sind = SearchCumProb(gen->GetVariateWithOpenRange());
+            double p = gen->GetVariateWithOpenRange();
+            size_t sind = SearchCumProb(p);
+            //std::cout << p << " - " << m_Prob[sind] << " (" << (sind > 0 ? m_Prob[sind-1] : 0.0) << ")" << std::endl;
             assert(sind < m_Prob.size());
             index = m_Indices[sind];
         }
@@ -487,9 +535,9 @@ public:
         {
             // In the case where the image is completely uniform (inside the mask)
             // we revert back to uniform random sampling (instead of failing with an error)
-            
-            IndexType origin = m_BBOrigin;
-            SizeType size = m_BBSize;
+
+            IndexType origin = Superclass::m_BBOrigin;
+            SizeType size = Superclass::m_BBSize;
 
             itk::Vector<double, ImageType::ImageDimension> v = gen->GetVariate();
             for(unsigned int i = 0; i < ImageType::ImageDimension; ++i)
@@ -498,7 +546,7 @@ public:
             }
         }
 
-        bool isMasked = PerformMaskTest(index);
+        bool isMasked = Superclass::PerformMaskTest(index);
         if(!isMasked) {
             if(attempts > 0)
             {
@@ -506,9 +554,11 @@ public:
                 return;
             }
 
-            pointSampleOut.m_Weight = itk::NumericTraits<WeightValueType>::Zero();
+            pointSampleOut.m_Weight = itk::NumericTraits<WeightValueType>::ZeroValue();
             return;
         }
+
+        pointSampleOut.m_Value = Superclass::m_ImageRawPtr->GetPixel(index);
 
         image->TransformIndexToPhysicalPoint(index, pointSampleOut.m_Point);
 
@@ -518,15 +568,17 @@ public:
         }
         else
         {
-            pointSampleOut.m_Weight = itk::NumericTraits<WeightValueType>::One();
+            pointSampleOut.m_Weight = itk::NumericTraits<WeightValueType>::OneValue();
         }
 
-        DitherPoint(pointSampleOut.m_Point);
+        Superclass::DitherPoint(pointSampleOut.m_Point);
     }
 protected:
     GradientWeightedPointSampler() {
         m_RNG = GeneratorType::New();
-        m_RNG->SetSeed(m_Seed*2U+13U);
+        m_RNG->SetSeed(Superclass::GetSeed()*2U+13U);
+
+        m_Sigma = 0.0;
     }
 
     size_t SearchCumProb(double p) {
@@ -564,7 +616,103 @@ protected:
 
     std::vector<double> m_Prob;
     std::vector<IndexType> m_Indices;
+    double m_Sigma;
 }; // End of class UniformPointSampler
 
+//
+// Hybrid point sampler
+// A collection of hybrid point samplers chosen at random
+// for each point
+//
+template <typename ImageType, typename MaskImageType, typename WeightImageType=ImageType>
+class HybridPointSampler : public PointSamplerBase<ImageType, MaskImageType, WeightImageType> {
+public:
+    using Self = HybridPointSampler;
+    using Superclass = PointSamplerBase<ImageType, MaskImageType, WeightImageType>;
+    using Pointer = itk::SmartPointer<Self>;
+    using ConstPointer = itk::SmartPointer<const Self>;
+    
+    using SuperclassPointer = itk::SmartPointer<Superclass>;
+
+    typedef typename ImageType::Pointer ImagePointer;
+    typedef typename MaskImageType::Pointer MaskImagePointer;
+    typedef typename WeightImageType::Pointer WeightImagePointer;
+
+    typedef typename ImageType::ValueType ValueType;
+    typedef typename MaskImageType::ValueType MaskValueType;
+    typedef typename WeightImageType::ValueType WeightValueType;
+
+    typedef typename ImageType::SpacingType SpacingType;
+    typedef typename ImageType::RegionType RegionType;
+    typedef typename ImageType::IndexType IndexType;
+    typedef typename ImageType::SizeType SizeType;
+
+    typedef itk::Statistics::MersenneTwisterRandomVariateGenerator GeneratorType;
+    typedef typename GeneratorType::Pointer GeneratorPointer;
+    
+    typedef PointSample<ImageType, WeightImageType> PointSampleType;
+
+    itkNewMacro(Self);
+  
+    itkTypeMacro(HybridPointSampler, PointSamplerBase);
+
+    virtual void Initialize() {
+        for(size_t i = 0; i < m_Samplers.size(); ++i) {
+            m_Samplers[i]->Initialize();
+        }
+    }
+
+    virtual void AddSampler(SuperclassPointer sampler, double weight=1.0) {
+        m_Samplers.push_back(sampler);
+        m_SamplerWeights.push_back(m_TotalWeight + weight);
+        m_TotalWeight += weight;
+    }
+
+    virtual void SetSeed(unsigned int seed) {
+        Superclass::SetSeed(seed);
+
+        for(size_t i = 0; i < m_Samplers.size(); ++i) {
+            m_Samplers[i]->SetSeed(seed + i * 17U);
+        }
+        m_RNG->SetSeed(seed * 2U + 19U);
+    }
+    virtual void RestartFromSeed() {
+        for(size_t i = 0; i < m_Samplers.size(); ++i) {
+            m_Samplers[i]->RestartFromSeed();
+        }
+        m_RNG->SetSeed(Superclass::GetSeed() * 2U + 19U);
+    }
+
+    virtual void Sample(PointSampleType& pointSampleOut, unsigned int attempts = 1)
+    {
+        if(m_Samplers.size() == 0)
+        {
+            pointSampleOut.m_Weight = 0.0;
+            return;
+        }
+
+        double p = m_RNG->GetVariateWithOpenRange() * m_TotalWeight;
+        size_t ind = 0;
+        for(size_t i = 0; i < m_Samplers; ++i) {
+            if(p < m_SamplerWeights[i]) {
+                ind = i;
+                break;
+            }
+        }
+        
+        m_Samplers[ind]->Sample(pointSampleOut, attempts); 
+    }
+protected:
+    HybridPointSampler() {
+        m_RNG = GeneratorType::New();
+        m_RNG->SetSeed(Superclass::GetSeed() * 2U + 19U);
+    }
+
+    GeneratorPointer m_RNG;
+
+    std::vector<SuperclassPointer> m_Samplers;
+    std::vector<double> m_SamplerWeights;
+    double m_TotalWeight;
+}; // End of class HybridPointSampler
 
 #endif

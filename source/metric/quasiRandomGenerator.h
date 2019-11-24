@@ -44,16 +44,24 @@ itk::Vector<double, 3U> MakeQuasiRandomGeneratorAlpha<3U>() {
 }
 
 template <unsigned int Dim>
-class QuasiRandomGenerator : itk::Object {
+class QuasiRandomGenerator : public itk::Object {
 public:
     using Self = QuasiRandomGenerator<Dim>;
-    using GeneratorType = typedef itk::Statistics::MersenneTwisterRandomVariateGenerator;
+    using Superclass = itk::Object;
+    using Pointer = itk::SmartPointer<Self>;
+    using ConstPointer = itk::SmartPointer<const Self>;
+
+    using GeneratorType = itk::Statistics::MersenneTwisterRandomVariateGenerator;
     using GeneratorPointer = typename GeneratorType::Pointer;
     using ValueType = itk::Vector<double, Dim>;
 
     itkNewMacro(Self);
   
     itkTypeMacro(PointSamplerBase, itk::Object);
+
+    void SetSeed(unsigned int seed) {
+        m_Generator->SetSeed(seed);
+    }
 
     void Restart() {
         m_State[0] = m_Generator->GetVariateWithOpenUpperRange();
@@ -75,7 +83,7 @@ protected:
         m_Generator->SetSeed(42);
         Restart();
     }
-    
+
     GeneratorPointer m_Generator;
 
     itk::Vector<double, Dim> m_Alpha;

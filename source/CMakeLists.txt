@@ -43,6 +43,8 @@ add_executable(ABSReg absReg.cpp)
 
 add_executable(TestMCDS testMCDS.cpp)
 
+add_executable(TestSuite tests/testSuite.cpp)
+
 target_link_libraries(ACRandomTransforms ${ITK_LIBRARIES})
 
 target_link_libraries(ACRegister ${ITK_LIBRARIES})
@@ -69,3 +71,4 @@ target_link_libraries(ABSReg ${ITK_LIBRARIES})
 
 target_link_libraries(TestMCDS ${ITK_LIBRARIES})
 
+target_link_libraries(TestSuite ${ITK_LIBRARIES})
