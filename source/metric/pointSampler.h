@@ -12,6 +12,8 @@
 #include "itkImage.h"
 #include "itkImageRegionConstIterator.h"
 #include "itkMersenneTwisterRandomVariateGenerator.h"
+#include "itkGradientMagnitudeRecursiveGaussianImageFilter.h"
+#include "quasiRandomGenerator.h"
 
 template <typename ImageType, typename WeightImageType=ImageType>
 struct PointSample {
@@ -134,8 +136,8 @@ protected:
         if(m_MaskRawPtr) {
             IndexType minIndex;
             IndexType maxIndex;
-            minIndex.Fill(itk::NumericTraits<IndexValueType>::Max());
-            maxIndex.Fill(itk::NumericTraits<IndexValueType>::Min())
+            minIndex.Fill(itk::NumericTraits<IndexValueType>::max());
+            maxIndex.Fill(itk::NumericTraits<IndexValueType>::min())
 
             typename itk::ImageRegionConstIterator<MaskImageType> IteratorType;
             IteratorType it(m_MaskRawPtr->GetLargestPossibleRegion(), m_MaskRawPtr);
@@ -273,7 +275,6 @@ protected:
     GeneratorPointer m_RNG;
 }; // End of class UniformPointSampler
 
-
 // Quasi random point sampler
 
 template <typename ImageType, typename MaskImageType, typename WeightImageType=ImageType>
@@ -300,6 +301,9 @@ public:
     typedef itk::Statistics::MersenneTwisterRandomVariateGenerator GeneratorType;
     typedef typename GeneratorType::Pointer GeneratorPointer;
     
+    typedef QuasiRandomGenerator<ImageType::ImageDimension> QRGeneratorType;
+    typedef QRGeneratorType::Pointer QRGeneratorPointer;
+
     typedef PointSample<ImageType, WeightImageType> PointSampleType;
 
     itkNewMacro(Self);
@@ -310,14 +314,15 @@ public:
         PointSamplerBase::RestartFromSeed();
 
         // Use a different seed from the dithering seed using an arbitrary factor and offset
-        m_RNG->SetSeed(m_Seed*2U+13U);
+        m_QRGenerator->SetSeed(m_Seed*2U+13U);
+        m_QRGenerator->Restart();
     }
 
     virtual void Sample(PointSampleType& pointSampleOut, unsigned int attempts = 1)
     {
         IndexType index;
 
-        GeneratorType* gen = m_RNG.GetPointer();
+        QRGeneratorType* gen = m_QRGenerator.GetPointer();
         ImageType* image = m_ImageRawPtr;
         MaskImageType* mask = m_MaskRawPtr;
         WeightImageType* weights = m_WeightsRawPtr;
@@ -325,8 +330,9 @@ public:
         IndexType origin = m_BBOrigin;
         SizeType size = m_BBSize;
 
+        itk::Vector<double, ImageType::ImageDimension> v = gen->GetVariate();
         for(unsigned int i = 0; i < ImageType::ImageDimension; ++i) {
-            index[i] = origin[i] + gen->GetIntegerVariate(size[i]) - 1;
+            index[i] = origin[i] + (IndexValueType)(v[i] * size[i]);
         }
 
         bool isMasked = PerformMaskTest(index);
@@ -355,13 +361,210 @@ public:
     }
 protected:
     QuasiRandomPointSampler() {
+        m_QRGenerator = QRGeneratorType::New();
+        m_QRGenerator->SetSeed(2U*m_Seed + 13U);
+    }
+
+    mutable QRGeneratorPointer m_QRGenerator;
+}; // End of class QuasiRandomPointSampler
+
+// Gradient-importance weighted random point sampler
+
+template <typename ImageType, typename MaskImageType, typename WeightImageType=ImageType>
+class GradientWeightedPointSampler : public PointSamplerBase<ImageType, MaskImageType, WeightImageType> {
+public:
+    using Self = GradientWeightedPointSampler;
+    using Superclass = PointSamplerBase<ImageType, MaskImageType, WeightImageType>;
+    using Pointer = SmartPointer<Self>;
+    using ConstPointer = SmartPointer<const Self>;
+    
+    typedef typename ImageType::Pointer ImagePointer;
+    typedef typename MaskImageType::Pointer MaskImagePointer;
+    typedef typename WeightImageType::Pointer WeightImagePointer;
+
+    typedef typename ImageType::ValueType ValueType;
+    typedef typename MaskImageType::ValueType MaskValueType;
+    typedef typename WeightImageType::ValueType WeightValueType;
+
+    typedef typename ImageType::SpacingType SpacingType;
+    typedef typename ImageType::RegionType RegionType;
+    typedef typename ImageType::IndexType IndexType;
+    typedef typename ImageType::SizeType SizeType;
+
+    typedef itk::Statistics::MersenneTwisterRandomVariateGenerator GeneratorType;
+    typedef typename GeneratorType::Pointer GeneratorPointer;
+    
+    typedef PointSample<ImageType, WeightImageType> PointSampleType;
+
+    itkNewMacro(Self);
+  
+    itkTypeMacro(GradientWeightedPointSampler, PointSamplerBase);
+
+    virtual void RestartFromSeed() {
+        PointSamplerBase::RestartFromSeed();
+
+        // Use a different seed from the dithering seed using an arbitrary factor and offset
+        m_RNG->SetSeed(m_Seed*2U+13U);
+    }
+
+    virtual void SetSigma(double sigma) {
+        m_Sigma = sigma;
+    }
+
+    virtual void Initialize() {
+        PointSamplerBase::Initialize();
+
+        // Compute the gradient magnitude image and generate a sparse list of cumulative probabilities
+        typedef itk::GradientMagnitudeRecursiveGaussianImageFilter<ImageType, ImageType> FilterType;
+
+        typename FilterType::Pointer filter = FilterType::New();
+        filter->SetSigma(m_Sigma);
+
+        filter->SetInput(m_Image);
+        
+        filter->Update();
+
+        ImagePointer gradIm = filter->GetOutput();
+
+        typename itk::ImageRegionConstIterator<ImageType> IteratorType;
+        typename itk::ImageRegionConstIterator<ImageType> MaskIteratorType;
+        IteratorType it(m_ImageRawPtr->GetLargestPossibleRegion(), m_ImageRawPtr);
+        MaskIteratorType itMask(m_MaskRawPtr->GetLargestPossibleRegion(), m_MaskRawPtr);
+
+        m_Prob.clear();
+        m_Indices.clear();
+
+        it.GoToBegin();
+        itMask.GoToBegin();
+
+        double totalValue = 0.0;
+
+        while(!it.IsAtEnd() && !itMask.IsAtEnd())
+        {
+            if(itMask.Value())
+            {
+                double value = it.Value();
+
+                if(value > 0.0)
+                {
+                    IndexType curIndex = it.GetIndex();
+                    totalValue += value;
+
+                    m_Prob.push_back(totalValue);
+                    m_Indices.push_back(curIndex);
+                }
+            }
+            ++it;
+            ++itMask;
+        }
+
+        if(totalValue < 1e-15)
+        {
+            totalValue = 1e-15;
+        }
+        for(size_t i = 0; i < m_Prob.size(); ++i)
+        {
+            m_Prob[i] /= totalValue;
+        }
+    }
+
+    virtual void Sample(PointSampleType& pointSampleOut, unsigned int attempts = 1)
+    {
+        IndexType index;
+
+        GeneratorType* gen = m_RNG.GetPointer();
+        ImageType* image = m_ImageRawPtr;
+        MaskImageType* mask = m_MaskRawPtr;
+        WeightImageType* weights = m_WeightsRawPtr;
+
+        if(m_Prob.size() == 0U)
+        {
+            size_t sind = SearchCumProb(gen->GetVariateWithOpenRange());
+            assert(sind < m_Prob.size());
+            index = m_Indices[sind];
+        }
+        else
+        {
+            // In the case where the image is completely uniform (inside the mask)
+            // we revert back to uniform random sampling (instead of failing with an error)
+            
+            IndexType origin = m_BBOrigin;
+            SizeType size = m_BBSize;
+
+            itk::Vector<double, ImageType::ImageDimension> v = gen->GetVariate();
+            for(unsigned int i = 0; i < ImageType::ImageDimension; ++i)
+            {
+                index[i] = origin[i] + (IndexValueType)(v[i] * size[i]);
+            }
+        }
+
+        bool isMasked = PerformMaskTest(index);
+        if(!isMasked) {
+            if(attempts > 0)
+            {
+                Sample(pointSampleOut, attempts - 1U);
+                return;
+            }
+
+            pointSampleOut.m_Weight = itk::NumericTraits<WeightValueType>::Zero();
+            return;
+        }
+
+        image->TransformIndexToPhysicalPoint(index, pointSampleOut.m_Point);
+
+        if(weights)
+        {
+            pointSampleOut.m_Weight = weights->GetPixel(index);
+        }
+        else
+        {
+            pointSampleOut.m_Weight = itk::NumericTraits<WeightValueType>::One();
+        }
+
+        DitherPoint(pointSampleOut.m_Point);
+    }
+protected:
+    GradientWeightedPointSampler() {
         m_RNG = GeneratorType::New();
         m_RNG->SetSeed(m_Seed*2U+13U);
     }
 
-    mutable GeneratorPointer m_RNG;
-}; // End of class QuasiRandomPointSampler
+    size_t SearchCumProb(double p) {
+        double* arr = m_Prob.data();
 
-// Gradient-importance weighted random point sampler
+        // Use binary search to find the point with the minimal cumulative
+        // probability greater than the random value 'p':
+        // [0.2, 0.5, 0.8, 1.0]
+        // SearchCumProb(p=0.6)
+        // should give index 2 (corresponding to the 0.8 cumulative probability)
+        if(m_Prob.size() > 0) {
+            size_t s = 0;
+            size_t e = m_Prob.size();
+
+            while(s < e)
+            {
+                size_t m = s + (e-s) / 2U;
+                double pr = arr[m];
+
+                if(p > pr)
+                {
+                    s = m + 1;
+                }
+                else
+                {
+                    e = m;
+                }
+            }
+
+            return e;
+        }
+        return 0;
+    }
+    GeneratorPointer m_RNG;
+
+    std::vector<double> m_Prob;
+    std::vector<IndexType> m_Indices;
+}; // End of class UniformPointSampler
+
 
 #endif
