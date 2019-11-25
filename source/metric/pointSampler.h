@@ -14,7 +14,6 @@
 #include "itkMersenneTwisterRandomVariateGenerator.h"
 #include "itkGradientMagnitudeImageFilter.h"
 #include "itkDiscreteGaussianImageFilter.h"
-//#include "itkGradientMagnitudeRecursiveGaussianImageFilter.h"
 #include "quasiRandomGenerator.h"
 
 template <typename ImageType, typename WeightImageType=ImageType>
