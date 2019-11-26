@@ -1,6 +1,6 @@
 
 #include "itkImage.h"
-#include "../metric/pointSampler.h"
+#include "../samplers/pointSampler.h"
 
 namespace PointSamplerTests {
 using ImageType = itk::Image<float, 2U>;

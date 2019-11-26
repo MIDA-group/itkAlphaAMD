@@ -54,7 +54,7 @@ public:
 
     using GeneratorType = itk::Statistics::MersenneTwisterRandomVariateGenerator;
     using GeneratorPointer = typename GeneratorType::Pointer;
-    using ValueType = itk::Vector<double, Dim>;
+    using ValueType = itk::FixedArray<double, Dim>;
 
     itkNewMacro(Self);
   
@@ -87,8 +87,8 @@ protected:
 
     GeneratorPointer m_Generator;
 
-    itk::Vector<double, Dim> m_Alpha;
-    itk::Vector<double, Dim> m_State;
+    itk::FixedArray<double, Dim> m_Alpha;
+    itk::FixedArray<double, Dim> m_State;
     itk::Size<Dim> m_Size;
 };
 
