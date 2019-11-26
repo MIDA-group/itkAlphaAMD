@@ -1,6 +1,6 @@
 
 //
-// A set of point samplers which enables sampling from the pixels
+// A set of point samplers which enables sampling from the pixels/voxels
 // in an image, with masks and auxilliary weight-maps.
 //
 // Author: Johan Ofverstedt
@@ -558,7 +558,7 @@ protected:
         m_RNG->SetSeed(Superclass::GetSeed()*2U+13U);
 
         m_Sigma = 0.0;
-        m_Tolerance = static_cast<ValueType>(1e-4);
+        m_Tolerance = static_cast<ValueType>(1e-5);
     }
 
     size_t SearchCumProb(ValueType p) {
