@@ -12,7 +12,8 @@
 #include <cmath>
 #include <algorithm>
 
-#include "samplers.h"
+#include "../samplers/valueSampler.h"
+//#include "samplers.h"
 
 // A namespace collecting auxilliary data-structures and functions
 // used by the Monte Carlo distance framework.
@@ -321,8 +322,14 @@ unsigned int PruneLevelsBinary(const std::vector<T>& values, unsigned int start,
 // In a multi-threaded scenario, each thread must command its own
 // private eval context.
 //
-template <typename ImageType, typename SamplerType>
-class MCDSEvalContext {
+template <typename ImageType>
+class MCDSEvalContext : public itk::Object {
+public:
+  using Self = MCDSEvalContext<ImageType>;
+  using Superclass = itk::Object;
+  using Pointer = itk::SmartPointer<Self>;
+  using ConstPointer = itk::SmartPointer<const Self>;
+   
   static constexpr unsigned int ImageDimension = ImageType::ImageDimension;
 
   typedef typename ImageType::Pointer ImagePointer;
@@ -334,17 +341,57 @@ class MCDSEvalContext {
   typedef typename itk::ContinuousIndex<double, ImageType::ImageDimension> ContinousIndexType;
   typedef typename ImageType::SpacingType SpacingType;
   typedef typename ImageType::ValueType ValueType;
-  typedef itk::Vector<ValueType, 2U> NodeValueType;
   typedef typename ImageType::PointType PointType;
 
+  typedef MCDSInternal::CornerPoints<IndexValueType, ImageType::ImageDimension> CornersType;
 
+  typedef ValueSamplerBase<ValueType, 1U> ValueSamplerType;
+  typedef typename ValueSamplerType::Pointer ValueSamplerPointer;
+  
+  itkNewMacro(Self);
 
+  itkTypeMacro(MCDSEvalContext, itk::Object);
+
+  std::unique_ptr<double[]> m_Table;
+  std::vector<ValueType> m_InwardsValues;
+  std::vector<ValueType> m_ComplementValues;
+
+  ValueSamplerPointer m_Sampler;
+  unsigned int m_Samples;
+  
+  virtual void SetSampleCount(unsigned int samples)
+  {
+    m_Samples = samples;
+  }
+
+  virtual void SetSampler(ValueSamplerPointer sampler)
+  {
+    m_Sampler = sampler;
+  }
+
+  virtual void Initialize()
+  {
+    m_InwardsValues.reserve(m_Samples);
+    m_ComplementValues.reserve(m_Samples);
+    m_Table = std::move(std::unique_ptr<double[]>(new double[m_Samples * CornersType::size]));
+  }
+protected:
+  MCDSEvalContext() = default;
 };
 
-template <typename ImageType, typename SamplerType>
-class MCAlphaCutPointToSetDistance
+template <typename ImageType>
+class MCAlphaCutPointToSetDistance : public itk::Object
 {
 public:
+    using Self = MCAlphaCutPointToSetDistance;
+    using Superclass = itk::Object;
+    using Pointer = itk::SmartPointer<Self>;
+    using ConstPointer = itk::SmartPointer<const Self>;
+   
+    itkNewMacro(Self);
+
+    itkTypeMacro(MCAlphaCutPointToSetDistance, itk::Object);
+
   static constexpr unsigned int ImageDimension = ImageType::ImageDimension;
 
   typedef typename ImageType::Pointer ImagePointer;
@@ -364,9 +411,13 @@ public:
   typedef itk::NearestNeighborInterpolateImageFunction<MaskImageType, double> InterpolatorType;
   typedef typename InterpolatorType::Pointer InterpolatorPointer;
 
+  typedef ValueSamplerBase<ValueType, 1U> ValueSamplerType;
+  typedef typename ValueSamplerType::Pointer ValueSamplerPointer;
+
   typedef MCDSInternal::CornerPoints<IndexValueType, ImageType::ImageDimension> CornersType;
   
-  typedef MCDSEvalContext<ImageType, SamplerType> EvalContextType;
+  typedef MCDSEvalContext<ImageType> EvalContextType;
+  typedef typename EvalContextType::Pointer EvalContextPointer;
 
   void SetImage(ImagePointer image)
   {
@@ -392,6 +443,15 @@ public:
     m_SampleCount = count;
   }
 
+  EvalContextPointer MakeEvalContext(ValueSamplerPointer valueSampler)
+  {
+    EvalContextPointer cxt = EvalContextType::New();
+    cxt->SetSampler(valueSampler);
+    cxt->SetSampleCount(m_SampleCount);
+    cxt->Initialize();
+    return cxt;
+  }
+
   // Builds the kd-tree and initializes data-structures
   void Initialize()
   {
@@ -409,19 +469,12 @@ public:
     unsigned int nodeCount = MCDSInternal::MaxNodeIndex<IndexType, SizeType, ImageDimension>(region.GetIndex(), sz, 1);
     m_Array = std::move(std::unique_ptr<NodeValueType[]>(new NodeValueType[nodeCount]));
 
-    m_Samples.reserve(m_SampleCount);
-    m_InwardsValues.reserve(m_SampleCount);
-    m_ComplementValues.reserve(m_SampleCount);
-
     if(MCDSInternal::PixelCount(sz) > 0)
       BuildTreeRec(1, region.GetIndex(), sz);
 
     m_Corners = MCDSInternal::ComputeCorners<IndexValueType, ImageType::ImageDimension>();
 
     m_DebugVisitCount = 0;
-
-    // Initialize table
-    m_Table = std::move(std::unique_ptr<double[]>(new double[m_SampleCount * CornersType::size]));
 
     m_RawImagePtr = m_Image.GetPointer();
 
@@ -432,6 +485,7 @@ public:
   }
 
   bool ValueAndDerivative(
+    EvalContextPointer evalContext,
     PointType point,
     ValueType h,
     double& valueOut,
@@ -460,18 +514,23 @@ public:
     }
     
     // Sample
-    m_Sampler.Sample(m_SampleCount, m_Samples);
-    m_InwardsValues.clear();
-    m_ComplementValues.clear();
-    for(unsigned int i = 0; i < m_SampleCount; ++i) {
-      if(m_Samples[i][0] <= h) {
-        m_InwardsValues.push_back(m_Samples[i][0]);
-      } else {
-        m_ComplementValues.push_back(m_One - m_Samples[i][0]);
+    evalContext->m_InwardsValues.clear();
+    evalContext->m_ComplementValues.clear();
+    for(unsigned int i = 0; i < evalContext->m_Samples; ++i)
+    {
+      itk::FixedArray<ValueType, 1U> val;
+      evalContext->m_Sampler->Sample(val);
+      if(val[0] <= h)
+      {
+          evalContext->m_InwardsValues.push_back(val[0]);
+      }
+      else
+      {
+          evalContext->m_ComplementValues.push_back(m_One - val[0]);
       }
     }
-    std::sort(m_InwardsValues.begin(), m_InwardsValues.end());
-    std::sort(m_ComplementValues.begin(), m_ComplementValues.end());
+    std::sort(evalContext->m_InwardsValues.begin(), evalContext->m_InwardsValues.end());
+    std::sort(evalContext->m_ComplementValues.begin(), evalContext->m_ComplementValues.end());
 
     RegionType region = image->GetLargestPossibleRegion();
 
@@ -505,42 +564,42 @@ public:
           minCoVal = valCo;
       }
 
-      for(; inwardsStart < m_InwardsValues.size(); ++inwardsStart) {
-        if(m_InwardsValues[inwardsStart] > minInVal)
+      for(; inwardsStart < evalContext->m_InwardsValues.size(); ++inwardsStart) {
+        if(evalContext->m_InwardsValues[inwardsStart] > minInVal)
           break;
       }
-      for(; complementStart < m_ComplementValues.size(); ++complementStart) {
-        if(m_ComplementValues[complementStart] > minCoVal)
+      for(; complementStart < evalContext->m_ComplementValues.size(); ++complementStart) {
+        if(evalContext->m_ComplementValues[complementStart] > minCoVal)
           break;
       }
     }
 
-    if(isFullyInside && (inwardsStart < m_InwardsValues.size() || complementStart < m_ComplementValues.size())) {
-      unsigned int sampleCount = m_InwardsValues.size() + m_ComplementValues.size();   
+    if(isFullyInside && (inwardsStart < evalContext->m_InwardsValues.size() || complementStart < evalContext->m_ComplementValues.size())) {
+      unsigned int sampleCount = evalContext->m_InwardsValues.size() + evalContext->m_ComplementValues.size();   
     
       double dmax = m_MaxDistance;
       double dmaxSq = dmax * dmax;
       for(unsigned int i = 0; i < CornersType::size; ++i) {
-        double* dists_i = m_Table.get() + (sampleCount * i);
+        double* dists_i = evalContext->m_Table.get() + (sampleCount * i);
 
         unsigned int j = 0;
         for(; j < inwardsStart; ++j)
           dists_i[j] = 0.0;
-        for(; j < m_InwardsValues.size(); ++j)
+        for(; j < evalContext->m_InwardsValues.size(); ++j)
           dists_i[j] = dmaxSq;
-        for(; j < m_InwardsValues.size()+complementStart; ++j)
+        for(; j < evalContext->m_InwardsValues.size()+complementStart; ++j)
           dists_i[j] = 0.0;
         for(; j < sampleCount; ++j)
           dists_i[j] = dmaxSq;
       }
 
-      Search(pntIndex, inwardsStart, complementStart);
+      Search(pntIndex, inwardsStart, complementStart, evalContext.GetPointer());
 
       MCDSInternal::ValuedCornerPoints<ImageDimension> cornerValues;
 
       for(unsigned int i = 0; i < CornersType::size; ++i) {
         cornerValues.m_Values[i] = 0.0;
-        double* dists_i = m_Table.get() + (m_SampleCount * i);
+        double* dists_i = evalContext->m_Table.get() + (m_SampleCount * i);
 
         for(unsigned int j = 0; j < m_SampleCount; ++j) {
           cornerValues.m_Values[i] += sqrt(dists_i[j]);
@@ -566,7 +625,12 @@ public:
     return true;
   }
   mutable size_t m_DebugVisitCount;
-private:
+protected:
+  MCAlphaCutPointToSetDistance()
+  {
+
+  }
+
   ImagePointer m_Image;
   ImageType* m_RawImagePtr;
   MaskImagePointer m_MaskImage;
@@ -576,11 +640,6 @@ private:
   ValueType m_One;
   double m_MaxDistance;
   CornersType m_Corners;
-  mutable std::unique_ptr<double[]> m_Table;
-  mutable SamplerType m_Sampler;
-  mutable std::vector<ValueType> m_InwardsValues;
-  mutable std::vector<ValueType> m_ComplementValues;
-  mutable std::vector<itk::Vector<double, 1U> > m_Samples;
 
   struct StackNode
   {
@@ -655,18 +714,18 @@ private:
 
   void Search(
       IndexType index,
-      unsigned int inwardsStart, unsigned int complementStart) const
+      unsigned int inwardsStart, unsigned int complementStart, EvalContextType* evalContext) const
   {
-    ValueType* inwardsValues = m_InwardsValues.data();
-    ValueType* complementValues = m_ComplementValues.data();
-    unsigned int inwardsCount = m_InwardsValues.size();
-    unsigned int complementCount = m_ComplementValues.size();
+    ValueType* inwardsValues = evalContext->m_InwardsValues.data();
+    ValueType* complementValues = evalContext->m_ComplementValues.data();
+    unsigned int inwardsCount = evalContext->m_InwardsValues.size();
+    unsigned int complementCount = evalContext->m_ComplementValues.size();
 
     typedef typename ImageType::SpacingType SpacingType;
 
     SpacingType spacing = m_Image->GetSpacing();
 
-    double* distTable = m_Table.get();
+    double* distTable = evalContext->m_Table.get();
     NodeValueType* data = m_Array.get(); // Node data
 
     unsigned int sampleCount = m_SampleCount;
@@ -897,7 +956,7 @@ private:
       curStackNode = stackNodes[--stackIndex];
     } // End main "recursion" loop
 
-    m_DebugVisitCount += visitCount;
+    //m_DebugVisitCount += visitCount;
   } // End of Search function
 
 }; // End of class

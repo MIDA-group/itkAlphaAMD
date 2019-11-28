@@ -83,7 +83,9 @@ public:
     }
 
     virtual void RestartFromSeed() {
-        m_DitheringGenerator->SetSeed(m_Seed);
+        for(size_t i = 0; i < m_DitheringGenerator.size(); ++i) {
+            m_DitheringGenerator[i]->SetSeed(m_Seed + i * 31U);
+        }
     }
 
     virtual bool IsDitheringOn() const { return m_Dithering; }
@@ -92,28 +94,45 @@ public:
 
     virtual void SetDitheringOn() { m_Dithering = true; }
 
+    virtual void SetThreads(unsigned int threads)
+    {
+        if(threads <= m_Threads)
+            return;
+
+        m_Threads = threads;
+
+        for(size_t i = m_DitheringGenerator.size(); i < threads; ++i) {
+            m_DitheringGenerator.push_back(GeneratorType::New());
+            m_DitheringGenerator[i]->SetSeed(m_Seed + i * 31U);
+        }
+    }
+
     virtual void Initialize() {
         m_Spacing = m_Image->GetSpacing();
 
         ComputeMaskBoundingBox();
+
+        if(this->m_Threads == 0U)
+        {
+            SetThreads(32U);
+        }
     };
 
     // Abstract function for computing a random index given an origin and size
     // of a region of interest.
-    virtual IndexType ComputeIndex(IndexType origin, SizeType size) = 0;
+    virtual IndexType ComputeIndex(unsigned int threadID, IndexType origin, SizeType size) = 0;
 
-    virtual void Sample(PointSampleType& pointSampleOut, unsigned int attempts = 1)
-    {
+    virtual void Sample(unsigned int threadID, PointSampleType& pointSampleOut, unsigned int attempts = 1) {
         ImageType* image = m_ImageRawPtr;
         MaskImageType* mask = m_MaskRawPtr;
         WeightImageType* weights = m_WeightsRawPtr;
 
-        IndexType index = ComputeIndex(m_BBOrigin, m_BBSize);
+        IndexType index = ComputeIndex(threadID, m_BBOrigin, m_BBSize);
 
         bool isMasked = PerformMaskTest(index);
         if(!isMasked) {
             if(attempts > 0) {
-                Sample(pointSampleOut, attempts - 1U);
+                Sample(threadID, pointSampleOut, attempts - 1U);
                 return;
             }
 
@@ -134,33 +153,35 @@ public:
             pointSampleOut.m_Weight = itk::NumericTraits<WeightValueType>::OneValue();
         }
 
-        DitherPoint(pointSampleOut.m_Point);
+        DitherPoint(threadID, pointSampleOut.m_Point);
     }
 
-    virtual void Sample(std::vector<PointSampleType>& pointSampleOut, unsigned int count, unsigned int attempts=1) {
+    virtual void Sample(unsigned int threadID, std::vector<PointSampleType>& pointSampleOut, unsigned int count, unsigned int attempts=1) {
         for(unsigned int i = 0; i < count; ++i) {
             PointSampleType pnt;
-            Sample(pnt, attempts);
+            Sample(threadID, pnt, attempts);
             pointSampleOut.push_back(pnt);
         }
     }
 protected:
     PointSamplerBase() {
         m_Seed = 42U;
+        m_Threads = 0U;
         m_ImageRawPtr = nullptr;
         m_MaskRawPtr = nullptr;
         m_WeightsRawPtr = nullptr;
-        m_DitheringGenerator = GeneratorType::New();
-        m_DitheringGenerator->SetSeed(m_Seed);
+        //this->SetThreads(32U);
+        //m_DitheringGenerator.push_back(GeneratorType::New());
+        //m_DitheringGenerator[0]->SetSeed(m_Seed);
         m_Dithering = false;
     }
     virtual ~PointSamplerBase() {
 
     }
 
-    void DitherPoint(PointType& point) {
+    void DitherPoint(unsigned int threadID, PointType& point) {
         if(m_Dithering) {
-            GeneratorType* gen = m_DitheringGenerator.GetPointer();
+            GeneratorType* gen = m_DitheringGenerator[threadID].GetPointer();
 
             for(unsigned int i = 0; i < ImageType::ImageDimension; ++i) {
                 point[i] = point[i] + (gen->GetVariateWithClosedRange()-0.5)*m_Spacing[i];
@@ -217,6 +238,8 @@ protected:
     }
 
     // Attributes
+
+    // Non-threaded data
     ImagePointer m_Image;
     MaskImagePointer m_Mask;
     WeightImagePointer m_Weights;
@@ -225,14 +248,16 @@ protected:
     MaskImageType* m_MaskRawPtr;
     WeightImageType* m_WeightsRawPtr;
 
-    mutable GeneratorPointer m_DitheringGenerator;
-
     unsigned long long m_Seed;
+    unsigned int m_Threads;
     
     SpacingType m_Spacing;
     bool m_Dithering;
     IndexType m_BBOrigin;
     SizeType m_BBSize;
+
+    // Thread-local data
+    std::vector<GeneratorPointer> m_DitheringGenerator;
 }; // End of class PointSamplerBase
 
 // Uniform point sampler
@@ -271,12 +296,28 @@ public:
         Superclass::RestartFromSeed();
 
         // Use a different seed from the dithering seed using an arbitrary factor and offset
-        m_RNG->SetSeed(Superclass::GetSeed()*2U+13U);
+        for(unsigned int i = 0; i < m_RNG.size(); ++i)
+        {
+            m_RNG[i]->SetSeed(Superclass::GetSeed()*(i+1)*2U+13U);
+        }
     }
 
-    virtual IndexType ComputeIndex(IndexType origin, SizeType size)
+    virtual void SetThreads(unsigned int threads) {
+        if(threads <= Superclass::m_Threads)
+            return;
+
+        Superclass::SetThreads(threads);
+
+        for(size_t i = m_RNG.size(); i < threads; ++i) {
+            m_RNG.push_back(GeneratorType::New());
+            m_RNG[i]->SetSeed(Superclass::GetSeed() + (i+1) * 2U + 13U);
+        }
+        std::cout << threads << std::endl;
+    }
+
+    virtual IndexType ComputeIndex(unsigned threadID, IndexType origin, SizeType size) override
     {
-        GeneratorType* gen = m_RNG.GetPointer();
+        GeneratorType* gen = m_RNG[threadID].GetPointer();
 
         IndexType index;
         for(unsigned int i = 0; i < ImageType::ImageDimension; ++i) {
@@ -291,11 +332,9 @@ public:
         return index;
     }
 protected:
-    UniformPointSampler() {
-        m_RNG = GeneratorType::New();
-        m_RNG->SetSeed(Superclass::GetSeed()*2U+13U);
-    }
-    GeneratorPointer m_RNG;
+    UniformPointSampler() = default;
+    
+    std::vector<GeneratorPointer> m_RNG;
 }; // End of class UniformPointSampler
 
 // Quasi random point sampler
@@ -338,13 +377,28 @@ public:
         Superclass::RestartFromSeed();
 
         // Use a different seed from the dithering seed using an arbitrary factor and offset
-        m_QRGenerator->SetSeed(Superclass::GetSeed()*2U+13U);
-        m_QRGenerator->Restart();
+        for(unsigned int i = 0; i < m_QRGenerator.size(); ++i)
+        {
+            m_QRGenerator[i]->SetSeed(Superclass::GetSeed()*(i+1)*2U+13U);
+            m_QRGenerator[i]->Restart();
+        }
     }
 
-    virtual IndexType ComputeIndex(IndexType origin, SizeType size)
+    virtual void SetThreads(unsigned int threads) {
+        if(threads <= Superclass::m_Threads)
+            return;
+
+        Superclass::SetThreads(threads);
+
+        for(size_t i = m_QRGenerator.size(); i < threads; ++i) {
+            m_QRGenerator.push_back(QRGeneratorType::New());
+            m_QRGenerator[i]->SetSeed(Superclass::GetSeed()*(i+1)*2U+13U);
+        }
+    }
+
+    virtual IndexType ComputeIndex(unsigned int threadID, IndexType origin, SizeType size)
     {
-        QRGeneratorType* gen = m_QRGenerator.GetPointer();
+        QRGeneratorType* gen = m_QRGenerator[threadID].GetPointer();
 
         IndexType index;
 
@@ -356,12 +410,9 @@ public:
         return index;
     }
 protected:
-    QuasiRandomPointSampler() {
-        m_QRGenerator = QRGeneratorType::New();
-        m_QRGenerator->SetSeed(2U*Superclass::GetSeed() + 13U);
-    }
+    QuasiRandomPointSampler() = default;
 
-    mutable QRGeneratorPointer m_QRGenerator;
+    std::vector<QRGeneratorPointer> m_QRGenerator;
 }; // End of class QuasiRandomPointSampler
 
 // Gradient-importance weighted random point sampler
@@ -401,8 +452,24 @@ public:
         Superclass::RestartFromSeed();
 
         // Use a different seed from the dithering seed using an arbitrary factor and offset
-        m_RNG->SetSeed(Superclass::GetSeed()*2U+13U);
+        for(unsigned int i = 0; i < m_RNG.size(); ++i)
+        {
+            m_RNG[i]->SetSeed(Superclass::GetSeed()*(i+1)*2U+13U);
+        }
     }
+
+    virtual void SetThreads(unsigned int threads) {
+        if(threads <= Superclass::m_Threads)
+            return;
+
+        Superclass::SetThreads(threads);
+
+        for(size_t i = m_RNG.size(); i < threads; ++i) {
+            m_RNG.push_back(GeneratorType::New());
+            m_RNG[i]->SetSeed(Superclass::GetSeed() + (i+1) * 2U + 13U);
+        }
+    }
+
 
     virtual double GetSigma() const
     {
@@ -521,10 +588,10 @@ public:
         }
     }
 
-    virtual IndexType ComputeIndex(IndexType origin, SizeType size)
+    virtual IndexType ComputeIndex(unsigned threadID, IndexType origin, SizeType size) override
     {
         IndexType index;
-        GeneratorType* gen = m_RNG.GetPointer();
+        GeneratorType* gen = m_RNG[threadID].GetPointer();
 
         if(m_Prob.size() > 0U)
         {
@@ -554,8 +621,8 @@ public:
     }
 protected:
     GradientWeightedPointSampler() {
-        m_RNG = GeneratorType::New();
-        m_RNG->SetSeed(Superclass::GetSeed()*2U+13U);
+        //m_RNG = GeneratorType::New();
+        //m_RNG->SetSeed(Superclass::GetSeed()*2U+13U);
 
         m_Sigma = 0.0;
         m_Tolerance = static_cast<ValueType>(1e-5);
@@ -592,8 +659,11 @@ protected:
         }
         return 0;
     }
-    GeneratorPointer m_RNG;
 
+    // Thread-local data
+    std::vector<GeneratorPointer> m_RNG;
+
+    // Non-threaded data
     std::vector<ValueType> m_Prob;
     std::vector<IndexType> m_Indices;
     double m_Sigma;
@@ -654,18 +724,45 @@ public:
         Superclass::SetSeed(seed);
 
         for(size_t i = 0; i < m_Samplers.size(); ++i) {
-            m_Samplers[i]->SetSeed(seed + i * 17U);
+            m_Samplers[i]->SetSeed(seed + i * 17U + 11U);
         }
-        m_RNG->SetSeed(seed * 2U + 19U);
+
+        for(unsigned int i = 0; i < m_RNG.size(); ++i)
+        {
+            m_RNG[i]->SetSeed(seed * 2U + 19U);
+        }
     }
     virtual void RestartFromSeed() {
+
         for(size_t i = 0; i < m_Samplers.size(); ++i) {
             m_Samplers[i]->RestartFromSeed();
         }
-        m_RNG->SetSeed(Superclass::GetSeed() * 2U + 19U);
+
+        for(unsigned int i = 0; i < m_RNG.size(); ++i)
+        {
+            m_RNG[i]->SetSeed(Superclass::GetSeed()*(i+1)*2U+19U);
+        }
+        //m_RNG->SetSeed(Superclass::GetSeed() * 2U + 19U);
     }
 
-    virtual IndexType ComputeIndex(IndexType origin, SizeType size)
+    virtual void SetThreads(unsigned int threads) {
+        if(threads <= Superclass::m_Threads)
+            return;
+
+        for(size_t i = 0; i < m_Samplers.size(); ++i) {
+            m_Samplers[i]->RestartFromSeed();
+        }
+
+        Superclass::SetThreads(threads);
+
+        for(size_t i = m_RNG.size(); i < threads; ++i) {
+            m_RNG.push_back(GeneratorType::New());
+            m_RNG[i]->SetSeed(Superclass::GetSeed() + (i+1) * 2U + 13U);
+        }
+    }
+
+
+    virtual IndexType ComputeIndex(unsigned int threadID, IndexType origin, SizeType size) override
     {
         if(m_Samplers.size() == 0)
         {
@@ -674,7 +771,7 @@ public:
             return index;
         }
 
-        double p = m_RNG->GetVariateWithOpenRange() * m_TotalWeight;
+        double p = m_RNG[threadID]->GetVariateWithOpenRange() * m_TotalWeight;
         size_t ind = 0;
         for(size_t i = 0; i < m_Samplers; ++i) {
             if(p < m_SamplerWeights[i]) {
@@ -686,7 +783,7 @@ public:
         return m_Samplers[ind]->ComputeIndex(origin, size);
     }
 
-    virtual void Sample(PointSampleType& pointSampleOut, unsigned int attempts = 1)
+    virtual void Sample(unsigned threadID, PointSampleType& pointSampleOut, unsigned int attempts = 1) override
     {
         if(m_Samplers.size() == 0)
         {
@@ -694,7 +791,7 @@ public:
             return;
         }
 
-        double p = m_RNG->GetVariateWithOpenRange() * m_TotalWeight;
+        double p = m_RNG[threadID]->GetVariateWithOpenRange() * m_TotalWeight;
         size_t ind = 0;
         for(size_t i = 0; i < m_Samplers; ++i) {
             if(p < m_SamplerWeights[i]) {
@@ -703,15 +800,15 @@ public:
             }
         }
         
-        m_Samplers[ind]->Sample(pointSampleOut, attempts); 
+        m_Samplers[ind]->Sample(threadID, pointSampleOut, attempts); 
     }
 protected:
     HybridPointSampler() {
-        m_RNG = GeneratorType::New();
-        m_RNG->SetSeed(Superclass::GetSeed() * 2U + 19U);
+        //m_RNG = GeneratorType::New();
+        //m_RNG->SetSeed(Superclass::GetSeed() * 2U + 19U);
     }
 
-    GeneratorPointer m_RNG;
+    std::vector<GeneratorPointer> m_RNG;
 
     std::vector<SuperclassPointer> m_Samplers;
     std::vector<double> m_SamplerWeights;
