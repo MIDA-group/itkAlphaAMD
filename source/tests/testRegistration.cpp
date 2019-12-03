@@ -120,7 +120,7 @@ double MeanAbsDiff(ImagePointer image1, ImagePointer image2)
         //IPT::SaveImageU8("./reftest.png", refImage);
         //IPT::SaveImageU8("./flotest.png", floImage);
 
-        using DistType = MCAlphaCutPointToSetDistance<ImageType>;
+        using DistType = MCAlphaCutPointToSetDistance<ImageType, unsigned short>;
         using DistPointer = typename DistType::Pointer;
         
         DistPointer distStructRefImage = DistType::New();
@@ -128,12 +128,10 @@ double MeanAbsDiff(ImagePointer image1, ImagePointer image2)
 
         distStructRefImage->SetSampleCount(20U);
         distStructRefImage->SetImage(refImage);
-        distStructRefImage->SetOne(1.0f);
         distStructRefImage->SetMaxDistance(0);
 
         distStructFloImage->SetSampleCount(20U);
         distStructFloImage->SetImage(floImage);
-        distStructFloImage->SetOne(1.0f);
         distStructFloImage->SetMaxDistance(0);
         
         distStructRefImage->Initialize();
@@ -164,8 +162,10 @@ double MeanAbsDiff(ImagePointer image1, ImagePointer image2)
         reg->SetTransformRefToFlo(CreateBSplineTransform(refImage, count));
         reg->SetTransformFloToRef(CreateBSplineTransform(floImage, count));
 
+        reg->SetSampleCountRefToFlo(8000);
+        reg->SetSampleCountFloToRef(8000);
         reg->SetLearningRate(3.0);
-        reg->SetIterations(2000);
+        reg->SetIterations(500);
         reg->SetSymmetryLambda(0.02);
 
         std::cout << "Initializing" << std::endl;

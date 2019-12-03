@@ -96,7 +96,7 @@ typename itk::Image<ImagePixelType, Dim>::Pointer ConvertImageToIntegerFormat(ty
     typedef typename CastFilter::Pointer CastFilterPointer;
 
     ValueType minVal = (ValueType)itk::NumericTraits<ImagePixelType>::min();
-    ValueType maxVal = (ValueType)itk::NumericTraits<ImagePixelType>::max();
+    ValueType maxVal = (ValueType)itk::NumericTraits<ImagePixelType>::max();//+0.9999999999;
     ValueType span = (maxVal - minVal);
     ValueType halfInt = (itk::NumericTraits<ValueType>::One / 2);
 

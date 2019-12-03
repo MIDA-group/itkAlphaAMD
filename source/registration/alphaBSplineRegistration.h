@@ -586,6 +586,16 @@ public:
         m_Iterations = iterations;
     }
 
+    virtual void SetSampleCountRefToFlo(unsigned int count)
+    {
+        m_RefToFloSampleCount = count;
+    }
+
+    virtual void SetSampleCountFloToRef(unsigned int count)
+    {
+        m_FloToRefSampleCount = count;
+    }
+
     virtual void Initialize()
     {
         assert(m_TransformRefToFlo.GetPointer() != nullptr);
@@ -603,10 +613,8 @@ public:
             //Initialize(unsigned int paramNumRefToFlo, unsigned int paramNumFloToRef, unsigned int supportSize, DistEvalContextPointer distEvalContextRefImage, DistEvalContextPointer distEvalContextFloImage)
             ThreadStateType ts;
             m_ThreadData.push_back(ts);
-            typename ValueSamplerBase<typename ImageType::ValueType, 1U>::Pointer valueSampler1 = QuasiRandomValueSampler<typename ImageType::ValueType, 1U>::New().GetPointer();
-            typename ValueSamplerBase<typename ImageType::ValueType, 1U>::Pointer valueSampler2 = QuasiRandomValueSampler<typename ImageType::ValueType, 1U>::New().GetPointer();
-            DistEvalContextPointer evalContext1 = m_DistDataStructRefImage->MakeEvalContext(valueSampler1);
-            DistEvalContextPointer evalContext2 = m_DistDataStructFloImage->MakeEvalContext(valueSampler2);
+            DistEvalContextPointer evalContext1 = m_DistDataStructRefImage->MakeEvalContext();
+            DistEvalContextPointer evalContext2 = m_DistDataStructFloImage->MakeEvalContext();
             m_ThreadData[i].Initialize(
                 m_TransformRefToFlo->GetNumberOfParameters(),
                 m_TransformFloToRef->GetNumberOfParameters(),
@@ -625,22 +633,22 @@ public:
             // Compute the distance value and derivatives for a sampled subset of the image
             //std::cout << "Stage 1" << std::endl;
 
-            chronometer.Start("Stage 1");            
+            //chronometer.Start("Stage 1");            
             typename VADThreaderType::DomainType completeDomain1;
             completeDomain1[0] = 0;
             completeDomain1[1] = this->m_RefToFloSampleCount + this->m_FloToRefSampleCount - 1;
             this->m_VADThreader->Execute(this, completeDomain1);
-            chronometer.Stop("Stage 1");
+            //chronometer.Stop("Stage 1");
 
             //std::cout << "Stage 2" << std::endl;
             // Aggregate, normalize, and apply a step counter to the gradient direction
 
-            chronometer.Start("Stage 2");            
+            //chronometer.Start("Stage 2");            
             typename StepThreaderType::DomainType completeDomain2;
             completeDomain2[0] = 0;
             completeDomain2[1] = m_TransformRefToFlo->GetNumberOfParameters() + m_TransformFloToRef->GetNumberOfParameters() - 1;
             this->m_StepThreader->Execute(this, completeDomain2);
-            chronometer.Stop("Stage 2");
+            //chronometer.Stop("Stage 2");
 
             m_TransformRefToFlo->UpdateTransformParameters(m_DerivativeRefToFlo, m_LearningRate);
             m_TransformFloToRef->UpdateTransformParameters(m_DerivativeFloToRef, m_LearningRate);
@@ -648,7 +656,7 @@ public:
             //if(i % 50 == 0)
                 //std::cout << "Value: " << m_Value << std::endl;
         }
-        chronometer.Report(std::cout);
+        //chronometer.Report(std::cout);
     }   
 protected:
     AlphaBSplineRegistration()
@@ -712,7 +720,7 @@ protected:
     friend class AlphaBSplineRegistrationStepThreader<Self, ImageType, TransformType, DistType>;
 
    
-    itk::TimeProbesCollectorBase chronometer;
+    //itk::TimeProbesCollectorBase chronometer;
 
 };
 

@@ -12,6 +12,7 @@
 #include <cmath>
 #include <algorithm>
 
+#include "../common/quantization.h"
 #include "../samplers/valueSampler.h"
 //#include "samplers.h"
 
@@ -283,7 +284,7 @@ inline bool SizeIsEmpty(itk::Size<ImageDimension> &sz)
 }
 
 template <typename T>
-unsigned int PruneLevelsLinear(const T* values, unsigned int start, unsigned int end, T val) {
+inline unsigned int PruneLevelsLinear(const T* values, unsigned int start, unsigned int end, T val) {
   for(; start < end; --end) {
     if(values[end-1] <= val) {
       break;
@@ -322,14 +323,18 @@ unsigned int PruneLevelsBinary(const std::vector<T>& values, unsigned int start,
 // In a multi-threaded scenario, each thread must command its own
 // private eval context.
 //
-template <typename ImageType>
+// TODO: Allow the seed to be set for each eval context...
+template <typename TImageType, typename TInternalValueType = unsigned short>
 class MCDSEvalContext : public itk::Object {
 public:
-  using Self = MCDSEvalContext<ImageType>;
+  using ImageType = TImageType;
+  using InternalValueType = TInternalValueType;
+
+  using Self = MCDSEvalContext;
   using Superclass = itk::Object;
   using Pointer = itk::SmartPointer<Self>;
-  using ConstPointer = itk::SmartPointer<const Self>;
-   
+  using ConstPointer = itk::SmartPointer<const Self>;   
+
   static constexpr unsigned int ImageDimension = ImageType::ImageDimension;
 
   typedef typename ImageType::Pointer ImagePointer;
@@ -345,7 +350,7 @@ public:
 
   typedef MCDSInternal::CornerPoints<IndexValueType, ImageType::ImageDimension> CornersType;
 
-  typedef ValueSamplerBase<ValueType, 1U> ValueSamplerType;
+  typedef ValueSamplerBase<double, 1U> ValueSamplerType;
   typedef typename ValueSamplerType::Pointer ValueSamplerPointer;
   
   itkNewMacro(Self);
@@ -353,8 +358,8 @@ public:
   itkTypeMacro(MCDSEvalContext, itk::Object);
 
   std::unique_ptr<double[]> m_Table;
-  std::vector<ValueType> m_InwardsValues;
-  std::vector<ValueType> m_ComplementValues;
+  std::vector<InternalValueType> m_InwardsValues;
+  std::vector<InternalValueType> m_ComplementValues;
 
   ValueSamplerPointer m_Sampler;
   unsigned int m_Samples;
@@ -379,7 +384,7 @@ protected:
   MCDSEvalContext() = default;
 };
 
-template <typename ImageType>
+template <typename TImageType, typename TInternalValueType = unsigned short>
 class MCAlphaCutPointToSetDistance : public itk::Object
 {
 public:
@@ -392,6 +397,9 @@ public:
 
     itkTypeMacro(MCAlphaCutPointToSetDistance, itk::Object);
 
+    using ImageType = TImageType;
+    using InternalValueType = TInternalValueType;
+
   static constexpr unsigned int ImageDimension = ImageType::ImageDimension;
 
   typedef typename ImageType::Pointer ImagePointer;
@@ -403,7 +411,7 @@ public:
   typedef typename itk::ContinuousIndex<double, ImageType::ImageDimension> ContinousIndexType;
   typedef typename ImageType::SpacingType SpacingType;
   typedef typename ImageType::ValueType ValueType;
-  typedef itk::Vector<ValueType, 2U> NodeValueType;
+  typedef itk::FixedArray<InternalValueType, 2U> NodeValueType;
   typedef typename ImageType::PointType PointType;
 
   typedef itk::Image<bool, ImageDimension> MaskImageType;
@@ -411,12 +419,12 @@ public:
   typedef itk::NearestNeighborInterpolateImageFunction<MaskImageType, double> InterpolatorType;
   typedef typename InterpolatorType::Pointer InterpolatorPointer;
 
-  typedef ValueSamplerBase<ValueType, 1U> ValueSamplerType;
+  typedef ValueSamplerBase<double, 1U> ValueSamplerType;
   typedef typename ValueSamplerType::Pointer ValueSamplerPointer;
 
   typedef MCDSInternal::CornerPoints<IndexValueType, ImageType::ImageDimension> CornersType;
   
-  typedef MCDSEvalContext<ImageType> EvalContextType;
+  typedef MCDSEvalContext<ImageType, InternalValueType> EvalContextType;
   typedef typename EvalContextType::Pointer EvalContextPointer;
 
   void SetImage(ImagePointer image)
@@ -429,11 +437,6 @@ public:
     m_MaskImage = maskImage;
   }
 
-  void SetOne(ValueType one)
-  {
-    m_One = one;
-  }
-
   void SetMaxDistance(double dmax) {
     m_MaxDistance = dmax;
   }
@@ -443,11 +446,27 @@ public:
     m_SampleCount = count;
   }
 
-  EvalContextPointer MakeEvalContext(ValueSamplerPointer valueSampler)
+  void SetSamplingMode(ValueSamplerTypeEnum samplerType)
+  {
+    m_ValueSamplerType = samplerType;
+  }
+
+  EvalContextPointer MakeEvalContext()
   {
     EvalContextPointer cxt = EvalContextType::New();
-    cxt->SetSampler(valueSampler);
     cxt->SetSampleCount(m_SampleCount);
+
+    ValueSamplerPointer valueSampler;
+    if(m_ValueSamplerType == ValueSamplerTypeUniform)
+    {
+      valueSampler = UniformValueSampler<double, 1U>::New().GetPointer();
+    }
+    else if(m_ValueSamplerType == ValueSamplerTypeQuasiRandom)
+    {
+      valueSampler = QuasiRandomValueSampler<double, 1U>::New().GetPointer();
+    }
+    cxt->SetSampler(valueSampler);
+
     cxt->Initialize();
     return cxt;
   }
@@ -513,20 +532,25 @@ public:
       frac[i] = cIndex[i] - (double)pntIndex[i];
     }
     
-    // Sample
+    // Sampling
+
+    InternalValueType hQ = QuantizeValue<ValueType, InternalValueType>(h);
+
     evalContext->m_InwardsValues.clear();
     evalContext->m_ComplementValues.clear();
     for(unsigned int i = 0; i < evalContext->m_Samples; ++i)
     {
-      itk::FixedArray<ValueType, 1U> val;
+      itk::FixedArray<double, 1U> val;
       evalContext->m_Sampler->Sample(val);
-      if(val[0] <= h)
+      
+      InternalValueType valQ = QuantizeValue<ValueType, InternalValueType>(val[0]);
+      if(valQ <= hQ)
       {
-          evalContext->m_InwardsValues.push_back(val[0]);
+          evalContext->m_InwardsValues.push_back(valQ);
       }
       else
       {
-          evalContext->m_ComplementValues.push_back(m_One - val[0]);
+          evalContext->m_ComplementValues.push_back(QuantizedValueMax<InternalValueType>() - valQ);
       }
     }
     std::sort(evalContext->m_InwardsValues.begin(), evalContext->m_InwardsValues.end());
@@ -545,36 +569,42 @@ public:
     unsigned int inwardsStart = 0;
     unsigned int complementStart = 0;
 
-    ValueType minInVal = m_One;
-    ValueType minCoVal = m_One;
+    ValueType minInVal = QuantizedValueMax<InternalValueType>();
+    ValueType minCoVal = QuantizedValueMax<InternalValueType>();
 
-    if(isFullyInside) {
+    if(isFullyInside)
+    {
 
-      for(unsigned int i = 0; i < CornersType::size; ++i) {     
+      for(unsigned int i = 0; i < CornersType::size; ++i)
+      {     
         IndexType cindex = pntIndex;
-        for(unsigned int j = 0; j < ImageDimension; ++j) {
+        for(unsigned int j = 0; j < ImageDimension; ++j)
+        {
           cindex[j] = cindex[j] + m_Corners.m_Points[i][j];
         }
 
-        ValueType valIn = image->GetPixel(cindex);
-        ValueType valCo = m_One - valIn;
+        InternalValueType valIn = QuantizeValue<ValueType, InternalValueType>(image->GetPixel(cindex));
+        InternalValueType valCo = QuantizedValueMax<InternalValueType>() - valIn;
         if(valIn < minInVal)
           minInVal = valIn;
         if(valCo < minCoVal)
           minCoVal = valCo;
       }
 
-      for(; inwardsStart < evalContext->m_InwardsValues.size(); ++inwardsStart) {
+      for(; inwardsStart < evalContext->m_InwardsValues.size(); ++inwardsStart)
+      {
         if(evalContext->m_InwardsValues[inwardsStart] > minInVal)
           break;
       }
-      for(; complementStart < evalContext->m_ComplementValues.size(); ++complementStart) {
+      for(; complementStart < evalContext->m_ComplementValues.size(); ++complementStart)
+      {
         if(evalContext->m_ComplementValues[complementStart] > minCoVal)
           break;
       }
     }
 
-    if(isFullyInside && (inwardsStart < evalContext->m_InwardsValues.size() || complementStart < evalContext->m_ComplementValues.size())) {
+    if(isFullyInside && (inwardsStart < evalContext->m_InwardsValues.size() || complementStart < evalContext->m_ComplementValues.size()))
+    {
       unsigned int sampleCount = evalContext->m_InwardsValues.size() + evalContext->m_ComplementValues.size();   
     
       double dmax = m_MaxDistance;
@@ -597,11 +627,13 @@ public:
 
       MCDSInternal::ValuedCornerPoints<ImageDimension> cornerValues;
 
-      for(unsigned int i = 0; i < CornersType::size; ++i) {
+      for(unsigned int i = 0; i < CornersType::size; ++i)
+      {
         cornerValues.m_Values[i] = 0.0;
         double* dists_i = evalContext->m_Table.get() + (m_SampleCount * i);
 
-        for(unsigned int j = 0; j < m_SampleCount; ++j) {
+        for(unsigned int j = 0; j < m_SampleCount; ++j)
+        {
           cornerValues.m_Values[i] += sqrt(dists_i[j]);
         }
 
@@ -628,7 +660,7 @@ public:
 protected:
   MCAlphaCutPointToSetDistance()
   {
-
+    m_ValueSamplerType = ValueSamplerTypeQuasiRandom;
   }
 
   ImagePointer m_Image;
@@ -637,9 +669,9 @@ protected:
   InterpolatorPointer m_MaskInterpolator;
   std::unique_ptr<NodeValueType[]> m_Array;
   unsigned int m_SampleCount;
-  ValueType m_One;
   double m_MaxDistance;
   CornersType m_Corners;
+  ValueSamplerTypeEnum m_ValueSamplerType;
 
   struct StackNode
   {
@@ -666,15 +698,15 @@ protected:
       NodeValueType nv;
       if(m_MaskImage) {
         if(m_MaskImage->GetPixel(index)) {
-          nv[0] = m_RawImagePtr->GetPixel(index);
-          nv[1] = m_One - nv[0];
+          nv[0] = QuantizeValue<ValueType, InternalValueType>(m_RawImagePtr->GetPixel(index));
+          nv[1] = QuantizedValueMax<InternalValueType>() - nv[0];
           data[nodeIndex - 1] = nv;
         } else {
-          data[nodeIndex - 1].Fill(itk::NumericTraits<ValueType>::ZeroValue());
+          data[nodeIndex - 1].Fill(QuantizedValueMin<InternalValueType>());
         }
       } else {
-        nv[0] = m_RawImagePtr->GetPixel(index);
-        nv[1] = m_One - nv[0];
+        nv[0] = QuantizeValue<ValueType, InternalValueType>(m_RawImagePtr->GetPixel(index));
+        nv[1] = QuantizedValueMax<InternalValueType>() - nv[0];
         data[nodeIndex - 1] = nv;
       }
     }
@@ -716,8 +748,8 @@ protected:
       IndexType index,
       unsigned int inwardsStart, unsigned int complementStart, EvalContextType* evalContext) const
   {
-    ValueType* inwardsValues = evalContext->m_InwardsValues.data();
-    ValueType* complementValues = evalContext->m_ComplementValues.data();
+    InternalValueType* inwardsValues = evalContext->m_InwardsValues.data();
+    InternalValueType* complementValues = evalContext->m_ComplementValues.data();
     unsigned int inwardsCount = evalContext->m_InwardsValues.size();
     unsigned int complementCount = evalContext->m_ComplementValues.size();
 

@@ -5,6 +5,12 @@
 #include "itkMersenneTwisterRandomVariateGenerator.h"
 #include "quasiRandomGenerator.h"
 
+enum ValueSamplerTypeEnum
+{
+    ValueSamplerTypeUniform,
+    ValueSamplerTypeQuasiRandom
+};
+
 template <typename ValueType, unsigned int Channels>
 class ValueSamplerBase : public itk::Object {
 public:
