@@ -437,8 +437,39 @@ public:
     m_MaskImage = maskImage;
   }
 
+  double GetMaxDistance() const
+  {
+    return m_MaxDistance;
+  }
+
   void SetMaxDistance(double dmax) {
+    assert(dmax >= 0.0);
+
     m_MaxDistance = dmax;
+  }
+
+  double GetApproximationThreshold() const
+  {
+    return m_ApproximationDistanceThreshold;
+  }
+
+  void SetApproximationThreshold(double distanceThreshold)
+  {
+    assert(distanceThreshold >= 0.0);
+
+    m_ApproximationDistanceThreshold = distanceThreshold;
+  }
+
+  double GetApproximationFraction() const
+  {
+    return m_ApproximationDistanceFraction;
+  }
+
+  void SetApproximationFraction(double distanceFraction)
+  {
+    assert(distanceFraction >= 0.0);
+
+    m_ApproximationDistanceFraction = distanceFraction;
   }
 
   void SetSampleCount(unsigned int count)
@@ -661,6 +692,9 @@ protected:
   MCAlphaCutPointToSetDistance()
   {
     m_ValueSamplerType = ValueSamplerTypeQuasiRandom;
+    m_MaxDistance = 0.0;
+    m_ApproximationDistanceThreshold = 20.0;
+    m_ApproximationDistanceFraction = 0.1;
   }
 
   ImagePointer m_Image;
@@ -670,6 +704,8 @@ protected:
   std::unique_ptr<NodeValueType[]> m_Array;
   unsigned int m_SampleCount;
   double m_MaxDistance;
+  double m_ApproximationDistanceThreshold;
+  double m_ApproximationDistanceFraction;
   CornersType m_Corners;
   ValueSamplerTypeEnum m_ValueSamplerType;
 
@@ -762,6 +798,11 @@ protected:
 
     unsigned int sampleCount = m_SampleCount;
 
+    double threshold = m_ApproximationDistanceThreshold;
+    double thresholdSq = threshold*threshold;
+    double fraction = 1.0 + m_ApproximationDistanceFraction;
+    double fractionSq = fraction*fraction;
+
     // Stack
     StackNode stackNodes[33];
     StackNode curStackNode;
@@ -852,12 +893,8 @@ protected:
         double lowerBoundDistance = MCDSInternal::LowerBoundDistance<IndexType, SizeType, ImageDimension>(index, innerNodeInd, innerNodeSz, spacing);
 
         // --- Approximation starts here ---
-        constexpr double threshold = 20.0;
-        constexpr double thresholdSq = threshold*threshold;
-        constexpr double xponent = 1.1;
-        constexpr double xponentSq = xponent*xponent;
         if(lowerBoundDistance > thresholdSq) {
-          lowerBoundDistance = (thresholdSq-1.0) + ((lowerBoundDistance-thresholdSq)+1.0) * xponentSq;
+          lowerBoundDistance = thresholdSq + (lowerBoundDistance-thresholdSq) * fractionSq;
         }
         // --- Approximation ends here ---
 
