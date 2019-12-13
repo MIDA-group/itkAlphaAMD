@@ -3,6 +3,7 @@
 #define QUANTIZATION_H
 
 #include <cmath>
+#include <cstdint>
 
 template <typename InType, typename OutType>
 OutType QuantizeValue(InType input)
@@ -126,6 +127,48 @@ inline unsigned short QuantizedValueMin<unsigned short>()
 {
     return ((unsigned short)0U);
 }
+
+// Fixed point numbers
+#define USE_FIXED_POINT
+
+#ifdef USE_FIXED_POINT
+using FixedPointNumber = int64_t;
+/*
+FixedPointNumber Add(FixedPointNumber a, FixedPointNumber b)
+{
+    return a + b;
+}
+
+FixedPointNumber Subtract(FixedPointNumber a, FixedPointNumber b)
+{
+    return a - b;
+}*/
+
+constexpr unsigned long long SHIFTED_ONE = 1ULL << 24ULL;
+
+inline FixedPointNumber FixedPointFromDouble(double a)
+{
+    return static_cast<FixedPointNumber>(a * static_cast<double>(SHIFTED_ONE));
+}
+
+inline double DoubleFromFixedPoint(FixedPointNumber a)
+{
+    return static_cast<double>(a) / static_cast<double>(SHIFTED_ONE);
+}
+#else
+using FixedPointNumber = double;
+
+FixedPointNumber FixedPointFromDouble(double a)
+{
+    return a;
+}
+
+double DoubleFromFixedPoint(FixedPointNumber a)
+{
+    return a;
+}
+
+#endif
 
 #endif
 

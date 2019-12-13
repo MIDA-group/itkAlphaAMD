@@ -20,8 +20,8 @@ void RunValueSampler()
     std::vector<VectorType2> out2;
 
     unsigned int count = 32U;
-    sampler->SampleN(out1, count);
-    sampler->SampleValues(out2, 256.0, count);
+    sampler->SampleN(out1, count, 0);
+    sampler->SampleValues(out2, 256.0, count, 0);
 
     std::cout << "[";
     for(unsigned int i = 0; i < count; ++i) {

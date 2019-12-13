@@ -9,6 +9,78 @@
 #include "itkNumericTraits.h"
 #include "itkMersenneTwisterRandomVariateGenerator.h"
 
+#include <limits>
+
+double QuasiRandomSqrt1D(unsigned int index, double state=0.0)
+{
+    static double alpha = 1.0/sqrt(2.0);
+    double tmp = state + (index+1) * alpha;
+    return tmp - (unsigned int)tmp;
+}
+
+double QuasiRandom3Sqrt1D(unsigned int index, double state=0.0)
+{
+    static double alpha = 1.0/sqrt(3.0);
+    double tmp = state + (index+1) * alpha;
+    return tmp - (unsigned int)tmp;
+}
+
+double QuasiRandomPI1D(unsigned int index, double state=0.0)
+{
+    constexpr double alpha = 1.0/M_PI;
+    double tmp = state + (index+1) * alpha;
+    return tmp - (unsigned int)tmp;
+}
+
+double QuasiRandomPHI1D(unsigned int index, double state=0.0)
+{
+    constexpr double alpha = 1.0/1.61803398874989484820458683436563;
+    double tmp = state + (index+1) * alpha;
+    return tmp - (unsigned int)tmp;    
+}
+
+inline
+unsigned long long XORShiftRNG1D(unsigned long long x)
+{
+    x ^= x << 13;
+	x ^= x >> 7;
+	x ^= x << 17;
+    return x;
+}
+
+template <unsigned int Dim>
+itk::FixedArray<unsigned long long, Dim> XORShiftRNG(unsigned long long x)
+{
+    itk::FixedArray<unsigned long long, Dim> result;
+    x = XORShiftRNG1D(x);
+    //x = XORShiftRNG1D(x);
+    //x = XORShiftRNG1D(x);
+    for(unsigned int i = 0; i < Dim; ++i)
+    {
+        x = XORShiftRNG1D(x);
+        result[i] = x;
+    }
+
+    return result;
+}
+
+template <unsigned int Dim>
+itk::FixedArray<double, Dim> XORShiftRNGDouble(unsigned long long x)
+{
+    itk::FixedArray<double, Dim> result;
+    x = XORShiftRNG1D(x);
+    //x = XORShiftRNG1D(x);
+    //x = XORShiftRNG1D(x);
+    constexpr double DENOM = (double)std::numeric_limits<unsigned long long>::max();
+    for(unsigned int i = 0; i < Dim; ++i)
+    {
+        x = XORShiftRNG1D(x);
+        result[i] = x / DENOM;
+    }
+
+    return result;
+}
+
 template <unsigned int Dim>
 itk::Vector<double, Dim> MakeQuasiRandomGeneratorAlpha();
 
@@ -52,23 +124,19 @@ public:
     using Pointer = itk::SmartPointer<Self>;
     using ConstPointer = itk::SmartPointer<const Self>;
 
-    using GeneratorType = itk::Statistics::MersenneTwisterRandomVariateGenerator;
-    using GeneratorPointer = typename GeneratorType::Pointer;
     using ValueType = itk::FixedArray<double, Dim>;
 
     itkNewMacro(Self);
   
-    itkTypeMacro(PointSamplerBase, itk::Object);
+    itkTypeMacro(QuasiRandomGenerator, itk::Object);
 
     void SetSeed(unsigned int seed) {
-        m_Generator->SetSeed(seed);
+        m_Seed = seed;
+        Restart();
     }
 
     void Restart() {
-        m_State[0] = m_Generator->GetVariateWithOpenUpperRange();
-        for(unsigned int i = 1; i < Dim; ++i) {
-            m_State[i] = m_State[0];
-        }
+        m_State = XORShiftRNGDouble<Dim>(m_Seed);
     }
 
     ValueType GetVariate() {
@@ -77,19 +145,36 @@ public:
         }
         return m_State;
     }
+
+    ValueType GetConstVariate(unsigned int index) const
+    {
+        ValueType result;
+        double index_dbl = static_cast<double>(index);
+        for(unsigned j = 0; j < Dim; ++j) {
+            //result[j] = fmod(m_State[j] + index_plus_1 * m_Alpha[j], 1.0);
+            double tmp = m_State[j] + index_dbl * m_Alpha[j];
+            result[j] = tmp - (unsigned int)tmp;
+        }
+        return result;
+        
+    }
+
+    void Advance(unsigned int index)
+    {
+        m_State = GetConstVariate(index);
+    }
 protected:
     QuasiRandomGenerator() {
         m_Alpha = MakeQuasiRandomGeneratorAlpha<Dim>();
-        m_Generator = GeneratorType::New();
-        m_Generator->SetSeed(42);
+        m_Seed = 42U;
         Restart();
     }
-
-    GeneratorPointer m_Generator;
 
     itk::FixedArray<double, Dim> m_Alpha;
     itk::FixedArray<double, Dim> m_State;
     itk::Size<Dim> m_Size;
+
+    unsigned int m_Seed;
 };
 
 #endif

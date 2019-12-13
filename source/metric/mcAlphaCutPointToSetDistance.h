@@ -364,14 +364,29 @@ public:
   ValueSamplerPointer m_Sampler;
   unsigned int m_Samples;
   
+  virtual unsigned int GetSampleCount() const
+  {
+    return m_Samples;
+  }
+
   virtual void SetSampleCount(unsigned int samples)
   {
     m_Samples = samples;
   }
 
+  virtual ValueSamplerPointer GetSampler() const
+  {
+    return m_Sampler;
+  }
+  
   virtual void SetSampler(ValueSamplerPointer sampler)
   {
     m_Sampler = sampler;
+  }
+
+  virtual void RestartSampler()
+  {
+    m_Sampler->RestartFromSeed();
   }
 
   virtual void Initialize()
@@ -472,6 +487,11 @@ public:
     m_ApproximationDistanceFraction = distanceFraction;
   }
 
+  unsigned int GetSampleCount() const
+  {
+    return m_SampleCount;
+  }
+
   void SetSampleCount(unsigned int count)
   {
     m_SampleCount = count;
@@ -536,6 +556,7 @@ public:
 
   bool ValueAndDerivative(
     EvalContextPointer evalContext,
+    unsigned int pointIndex,
     PointType point,
     ValueType h,
     double& valueOut,
@@ -572,7 +593,7 @@ public:
     for(unsigned int i = 0; i < evalContext->m_Samples; ++i)
     {
       itk::FixedArray<double, 1U> val;
-      evalContext->m_Sampler->Sample(val);
+      evalContext->m_Sampler->Sample(val, pointIndex, i, evalContext->m_Samples);
       
       InternalValueType valQ = QuantizeValue<ValueType, InternalValueType>(val[0]);
       if(valQ <= hQ)
@@ -605,7 +626,6 @@ public:
 
     if(isFullyInside)
     {
-
       for(unsigned int i = 0; i < CornersType::size; ++i)
       {     
         IndexType cindex = pntIndex;

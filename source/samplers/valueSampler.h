@@ -40,27 +40,32 @@ public:
         ;
     }
 
+    virtual void EndIteration(unsigned int count)
+    {
+        ;
+    }
+
     virtual void Initialize()
     {
         ;
     }
 
-    virtual void Sample(VectorType& out) { assert(false); }
-
-    virtual void SampleN(std::vector<VectorType>& valuesOut, unsigned int count)
+    virtual void Sample(VectorType& out, unsigned int pointIndex, unsigned int it, unsigned int sampleCount) { assert(false); }
+/*
+    virtual void SampleN(std::vector<VectorType>& valuesOut, unsigned int count, unsigned int it)
     {
         for(unsigned int i = 0; i < count; ++i) {
             VectorType v;
-            Sample(v);
+            Sample(v, it + i);
             valuesOut.push_back(v);
         }
     }
 
     template <typename OtherType>
-    void SampleValue(itk::FixedArray<OtherType, Channels>& out, ValueType upper)
+    void SampleValue(itk::FixedArray<OtherType, Channels>& out, ValueType upper, unsigned int it)
     {
         VectorType v;
-        Sample(v);
+        Sample(v, it);
         for(unsigned int i = 0; i < Channels; ++i)
         {
             out[i] = static_cast<OtherType>(v[i] * upper);
@@ -68,14 +73,14 @@ public:
     }
 
     template <typename OtherType>
-    void SampleValues(std::vector<itk::FixedArray<OtherType, Channels> >&out, ValueType upper, unsigned int count)
+    void SampleValues(std::vector<itk::FixedArray<OtherType, Channels> >&out, ValueType upper, unsigned int count, unsigned int it)
     {
         for(unsigned int i = 0; i < count; ++i) {
             itk::FixedArray<OtherType, Channels> v;
-            SampleValue(v, upper);
+            SampleValue(v, upper, it + i);
             out.push_back(v);
         }
-    }
+    }*/
 protected:
     ValueSamplerBase() {
         m_Seed = 42U;
@@ -97,9 +102,6 @@ public:
     using ConstPointer = itk::SmartPointer<const Self>;
 
     using VectorType = typename Superclass::VectorType;
-    
-    using GeneratorType = itk::Statistics::MersenneTwisterRandomVariateGenerator;
-    using GeneratorPointer = typename GeneratorType::Pointer;
 
     itkNewMacro(Self);
   
@@ -107,7 +109,12 @@ public:
 
     virtual void RestartFromSeed()
     {
-        m_RNG->SetSeed(Superclass::GetSeed());
+        ;
+    }
+
+    virtual void EndIteration(unsigned int count)
+    {
+        ;
     }
 
     virtual void Initialize()
@@ -115,21 +122,17 @@ public:
         ;
     }
 
-    virtual void Sample(VectorType& out) {
-        for(unsigned int i = 0; i < Channels; ++i) {
-            out[i] = m_RNG->GetVariateWithOpenRange();
-        }
+
+
+    virtual void Sample(VectorType& out, unsigned int pointIndex, unsigned int it, unsigned int sampleCount) {
+        out = XORShiftRNGDouble<Channels>(Superclass::GetSeed() + pointIndex * sampleCount + it);
     }
 protected:
     UniformValueSampler() {
-        m_RNG = GeneratorType::New();
-        m_RNG->SetSeed(Superclass::GetSeed());
     }
     virtual ~UniformValueSampler() {
 
     }
-
-    GeneratorPointer m_RNG;
 }; // End of class UniformValueSampler
 
 template <typename ValueType, unsigned int Channels>
@@ -155,13 +158,18 @@ public:
         m_RNG->Restart();
     }
 
+    virtual void EndIteration(unsigned int count)
+    {
+        m_RNG->Advance(count);
+    }
+
     virtual void Initialize()
     {
         ;
     }
 
-    virtual void Sample(VectorType& out) {
-        out = m_RNG->GetVariate();
+    virtual void Sample(VectorType& out, unsigned int pointIndex, unsigned int it, unsigned int sampleCount) {
+        out = m_RNG->GetConstVariate(pointIndex * sampleCount + it);
     }
 protected:
     QuasiRandomValueSampler() {
