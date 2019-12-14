@@ -84,7 +84,7 @@ public:
 
     virtual void EndIteration(unsigned int count)
     {
-        m_Seed += count * 3U;
+        m_Seed = XORShiftRNG1D((m_Seed + count)*3U);
     }
 
     virtual bool IsDitheringOn() const { return m_Dithering; }
@@ -101,7 +101,7 @@ public:
 
     // Abstract function for computing a random index given an origin and size
     // of a region of interest.
-    virtual IndexType ComputeIndex(unsigned int sampleID, IndexType origin, SizeType size) = 0;
+    virtual IndexType ComputeIndex(unsigned int sampleID, IndexType& origin, SizeType& size) = 0;
 
     virtual void Sample(unsigned int sampleID, PointSampleType& pointSampleOut, unsigned int attempts = 1) {
         ImageType* image = m_ImageRawPtr;
@@ -265,7 +265,7 @@ public:
   
     itkTypeMacro(UniformPointSampler, PointSamplerBase);
 
-    virtual IndexType ComputeIndex(unsigned int sampleID, IndexType origin, SizeType size) override
+    virtual IndexType ComputeIndex(unsigned int sampleID, IndexType& origin, SizeType& size) override
     {
         itk::FixedArray<unsigned long long, ImageType::ImageDimension> vec = XORShiftRNG<ImageType::ImageDimension>(Superclass::GetSeed() + sampleID * 13U);
 
@@ -334,7 +334,7 @@ public:
         m_QRGenerator->Advance(count);
     }
 
-    virtual IndexType ComputeIndex(unsigned int sampleID, IndexType origin, SizeType size) override
+    virtual IndexType ComputeIndex(unsigned int sampleID, IndexType& origin, SizeType& size) override
     {
         QRGeneratorType* gen = m_QRGenerator.GetPointer();
 
@@ -354,7 +354,6 @@ protected:
     };
 
     QRGeneratorPointer m_QRGenerator;
-    unsigned int m_Offset;
 }; // End of class QuasiRandomPointSampler
 
 // Gradient-importance weighted random point sampler
@@ -513,27 +512,17 @@ public:
         }
     }
 
-    virtual IndexType ComputeIndex(unsigned int sampleID, IndexType origin, SizeType size) override
+    virtual IndexType ComputeIndex(unsigned int sampleID, IndexType& origin, SizeType& size) override
     {
         IndexType index;
+        size_t probSz = m_Prob.size();
 
-        if(m_Prob.size() > 0U)
+        if(probSz > 0U)
         {
-            //QRGeneratorType* gen = m_QRGenerator.GetPointer();
-            //itk::FixedArray<double, 1U> v = gen->GetConstVariate(sampleID);
+            ValueType p = XORShiftRNGDouble1D(Superclass::GetSeed() + sampleID);
 
-            //ValueType p = static_cast<ValueType>(gen->GetVariateWithOpenRange());
-            //ValueType p = static_cast<ValueType>(v[0]);
-            //ValueType p = QuasiRandom3Sqrt1D(Superclass::GetSeed() * 7U + sampleID);
-            //ValueType p = QuasiRandomPHI1D(Superclass::GetSeed() + sampleID);
-            ValueType p = XORShiftRNGDouble<1U>(Superclass::GetSeed() * 7U + sampleID)[0];
-            //if(sampleID < 1000)
-            //{
-            //    std::cout << sampleID << " : [" << p << "]" << "(" << m_Prob.size() << ")" << std::endl;
-                //std::cout << sampleID << " : [" << p << "]" << ", Ind: " << sind << ", with prob: " << m_Prob[sind] << "(" << m_Prob.size() << ")" << std::endl;
-            //}
             size_t sind = SearchCumProb(p);
-            assert(sind < m_Prob.size());
+            assert(sind < probSz);
             index = m_Indices[sind];
         }
         else
@@ -546,17 +535,6 @@ public:
             for(unsigned int i = 0; i < ImageType::ImageDimension; ++i) {
                 index[i] = origin[i] + (IndexValueType)(v[i] % size[i]);
             }
-/*
-            for(unsigned int i = 0; i < ImageType::ImageDimension; ++i)
-            {
-                if(size[i] > 0U)
-                {
-                    unsigned int step = //(gen->GetIntegerVariate() % size[i]);
-                    index[i] = origin[i] + step;
-                }
-                else
-                    index[i] = origin[i];
-            }*/
         }
 
         return index;
@@ -569,19 +547,20 @@ protected:
 
     size_t SearchCumProb(ValueType p) {
         ValueType* arr = m_Prob.data();
+        size_t sz = m_Prob.size();
 
         // Use binary search to find the point with the minimal cumulative
         // probability greater than the random value 'p':
         // [0.2, 0.5, 0.8, 1.0]
         // SearchCumProb(p=0.6)
         // should give index 2 (corresponding to the 0.8 cumulative probability)
-        if(m_Prob.size() > 0) {
+        if(sz > 0) {
             size_t s = 0;
-            size_t e = m_Prob.size();
+            size_t e = sz;
 
             while(s < e)
             {
-                size_t m = s + (e-s) / 2U;
+                size_t m = s + ((e-s) / 2U);
                 ValueType pr = arr[m];
 
                 if(p > pr)
@@ -650,7 +629,9 @@ public:
     virtual void Initialize() {
         for(size_t i = 0; i < m_Samplers.size(); ++i) {
             m_Samplers[i]->Initialize();
+            m_SamplerWeights[i] /= m_TotalWeight;
         }
+        m_TotalWeight = 1.0;
     }
 
     virtual void AddSampler(SuperclassPointer sampler, double weight=1.0) {
@@ -696,9 +677,7 @@ public:
 
     virtual void EndIteration(unsigned int count) override
     {
-        Superclass::EndIteration(count);
-
-        m_Offset += count;
+        Superclass::EndIteration(XORShiftRNG1D(count));
 
         for(size_t i = 0; i < m_Samplers.size(); ++i) {
             m_Samplers[i]->EndIteration(count);
@@ -713,17 +692,11 @@ public:
         }
     }
 
-    virtual IndexType ComputeIndex(unsigned int sampleID, IndexType origin, SizeType size) override
+    virtual IndexType ComputeIndex(unsigned int sampleID, IndexType& origin, SizeType& size) override
     {
-        if(m_Samplers.size() == 0)
-        {
-            IndexType index;
-            index.Fill(itk::NumericTraits<IndexValueType>::ZeroValue());
-            return index;
-        }
+        assert(m_Samples.size() > 0U);
         
-        double v = XORShiftRNGDouble<1U>(Superclass::GetSeed() * 3U + sampleID * 5U)[0];
-        double p = v * m_TotalWeight;
+        double p = XORShiftRNGDouble1D(Superclass::GetSeed() + sampleID);
         size_t ind = m_Samplers.size()-1;
         for(size_t i = 0; i < m_Samplers.size(); ++i) {
             if(p <= m_SamplerWeights[i]) {
@@ -737,17 +710,13 @@ public:
 
     virtual void Sample(unsigned int sampleID, PointSampleType& pointSampleOut, unsigned int attempts = 1) override
     {
-         if(m_Samplers.size() == 0)
-        {
-            pointSampleOut.m_Weight = 0.0;
-            return;
-        }
+        size_t sz = m_Samplers.size();
+        assert(sz > 0U);
 
-        double v = XORShiftRNGDouble<1U>(Superclass::GetSeed() * 3U + m_Offset + sampleID * 5U)[0];
-        double p = v * m_TotalWeight;
+        double p = XORShiftRNGDouble1D(Superclass::GetSeed() + sampleID);
 
-        size_t ind = m_Samplers.size()-1;
-        for(size_t i = 0; i < m_Samplers.size(); ++i) {
+        size_t ind = sz-1;
+        for(size_t i = 0; i < sz; ++i) {
             if(p <= m_SamplerWeights[i]) {
                 ind = i;
                 break;
@@ -759,13 +728,11 @@ public:
 protected:
     HybridPointSampler() {
         m_TotalWeight = 0.0;
-        m_Offset = 0U;
     }
 
     std::vector<SuperclassPointer> m_Samplers;
     std::vector<double> m_SamplerWeights;
     double m_TotalWeight;
-    unsigned int m_Offset;
 }; // End of class HybridPointSampler
 
 #endif

@@ -114,14 +114,29 @@ inline double InterpolateDistances<2U>(itk::Vector<double, 2U> frac, ValuedCorne
   double step_01_00 = v_01 - v_00;
   double step_11_10 = v_11 - v_10;
   
+  // Compute the value with bilinear interpolation
+  const double value = v_00 * ixx * iyy + v_10 * xx * iyy + v_01 * ixx * yy + v_11 * xx * yy;
   //grad[0] = iyy * step_10_00 + yy * step_11_01;
   //grad[1] = ixx * step_01_00 + xx * step_11_10;
   //return v_00 * ixx * iyy + v_10 * xx * iyy + v_01 * ixx * yy + v_11 * xx * yy;
-  // Version that uses mid-point
-  grad[0] = (step_10_00 + step_11_01) * 0.5;
-  grad[1] = (step_01_00 + step_11_10) * 0.5;
   
-  return v_00 * ixx * iyy + v_10 * xx * iyy + v_01 * ixx * yy + v_11 * xx * yy;
+  // The 0.5 threshold is an arbitrary threshold below which the magnitude of
+  // the gradient begins to be proportionally scaled to ease out gradients near
+  // objects.
+  constexpr double threshold = 0.5;
+  constexpr double threshold_rec = 1.0/threshold;
+
+  // Compute the scale to apply (initially at 0.5, since if no easing is applied,
+  // the gradient should just be the average of two differences).
+  double scale = 0.5;
+  if(value < threshold)
+    scale *= (value*threshold_rec);
+  
+  // Compute the gradient vector at the mid-point between the grid points.
+  grad[0] = (step_10_00 + step_11_01) * scale;
+  grad[1] = (step_01_00 + step_11_10) * scale;
+  
+  return value;
 }
 
 // Trilinear interpolation
@@ -151,7 +166,7 @@ inline double InterpolateDistances<3U>(itk::Vector<double, 3U> frac, ValuedCorne
   double v_0 = v_00 * iyy + v_10 * yy;
   double v_1 = v_01 * iyy + v_11 * yy;
 
-  double v = v_0 * izz + v_1 * zz;
+  double value = v_0 * izz + v_1 * zz;
 
   /*
    v = v_0 * izz + v_1 * zz
@@ -178,12 +193,25 @@ inline double InterpolateDistances<3U>(itk::Vector<double, 3U> frac, ValuedCorne
   //grad[0] = ((v_100 - v_000) * iyy + (v_110 - v_010) * yy) * izz + ((v_101 - v_001) * iyy + (v_111 - v_011) * yy) * zz;
   //grad[1] = ((v_010 - v_000) * ixx + (v_110 - v_100) * xx) * izz + ((v_011 - v_001) * ixx + (v_111 - v_101) * xx) * zz;
   //grad[2] = ((v_001 - v_000) * ixx + (v_101 - v_100) * xx) * iyy + ((v_011 - v_010) * ixx + (v_111 - v_110) * xx) * yy;
+  
+  // The 0.5 threshold is an arbitrary threshold below which the magnitude of
+  // the gradient begins to be proportionally scaled to ease out gradients near
+  // objects.
+  constexpr double threshold = 0.5;
+  constexpr double threshold_rec = 1.0/threshold;
 
-  // Version that uses mid-point
-  grad[0] = (((v_100 - v_000) + (v_110 - v_010)) + ((v_101 - v_001) + (v_111 - v_011))) * 0.25;
-  grad[1] = (((v_010 - v_000) + (v_110 - v_100)) + ((v_011 - v_001) + (v_111 - v_101))) * 0.25;
-  grad[2] = (((v_001 - v_000) + (v_101 - v_100)) + ((v_011 - v_010) + (v_111 - v_110))) * 0.25;
-  return v;
+  // Compute the scale to apply (initially at 0.25, since if no easing is applied,
+  // the gradient should just be the average of four differences).
+  double scale = 0.25;
+  if(value < threshold)
+    scale *= (value*threshold_rec);
+
+  // Compute the gradient vector at the mid-point between the grid points.
+  grad[0] = (((v_100 - v_000) + (v_110 - v_010)) + ((v_101 - v_001) + (v_111 - v_011))) * scale;
+  grad[1] = (((v_010 - v_000) + (v_110 - v_100)) + ((v_011 - v_001) + (v_111 - v_101))) * scale;
+  grad[2] = (((v_001 - v_000) + (v_101 - v_100)) + ((v_011 - v_010) + (v_111 - v_110))) * scale;
+  
+  return value;
 }
 
 template <unsigned int ImageDimension>

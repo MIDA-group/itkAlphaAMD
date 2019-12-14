@@ -42,14 +42,22 @@ double QuasiRandomPHI1D(unsigned int index, double state=0.0)
 inline
 unsigned long long XORShiftRNG1D(unsigned long long x)
 {
-    x ^= x << 13;
-	x ^= x >> 7;
-	x ^= x << 17;
+    x ^= x << 13U;
+	x ^= x >> 7U;
+	x ^= x << 17U;
     return x;
 }
 
+inline
+double XORShiftRNGDouble1D(unsigned long long x)
+{
+    constexpr double DENOM = 1.0/(double)std::numeric_limits<unsigned long long>::max();
+    x = XORShiftRNG1D(x);
+    return DENOM * XORShiftRNG1D(x);
+}
+
 template <unsigned int Dim>
-itk::FixedArray<unsigned long long, Dim> XORShiftRNG(unsigned long long x)
+inline itk::FixedArray<unsigned long long, Dim> XORShiftRNG(unsigned long long x)
 {
     itk::FixedArray<unsigned long long, Dim> result;
     x = XORShiftRNG1D(x);
@@ -65,17 +73,17 @@ itk::FixedArray<unsigned long long, Dim> XORShiftRNG(unsigned long long x)
 }
 
 template <unsigned int Dim>
-itk::FixedArray<double, Dim> XORShiftRNGDouble(unsigned long long x)
+inline itk::FixedArray<double, Dim> XORShiftRNGDouble(unsigned long long x)
 {
     itk::FixedArray<double, Dim> result;
     x = XORShiftRNG1D(x);
     //x = XORShiftRNG1D(x);
     //x = XORShiftRNG1D(x);
-    constexpr double DENOM = (double)std::numeric_limits<unsigned long long>::max();
+    constexpr double DENOM = 1.0/(double)std::numeric_limits<unsigned long long>::max();
     for(unsigned int i = 0; i < Dim; ++i)
     {
         x = XORShiftRNG1D(x);
-        result[i] = x / DENOM;
+        result[i] = x * DENOM;
     }
 
     return result;

@@ -66,7 +66,7 @@ typename ImageType::Pointer ApplyTransform(ImagePointer refImage, ImagePointer f
     return resample->GetOutput();
 }
 
-typename PointSamplerBase<ImageType, itk::Image<bool, 2U>, ImageType>::Pointer CreateHybridPointSampler(ImagePointer im, double w1 = 0.5)
+typename PointSamplerBase<ImageType, itk::Image<bool, 2U>, ImageType>::Pointer CreateHybridPointSampler(ImagePointer im, double w1 = 0.5, unsigned int seed = 1000U)
 {
     using PointSamplerType = PointSamplerBase<ImageType, itk::Image<bool, 2U>, ImageType>;
     using PointSamplerPointer = typename PointSamplerType::Pointer;
@@ -83,14 +83,27 @@ typename PointSamplerBase<ImageType, itk::Image<bool, 2U>, ImageType>::Pointer C
     sampler3->AddSampler(sampler1, w1);
     sampler3->AddSampler(sampler2.GetPointer(), 1.0-w1);
     sampler3->SetImage(im);
-    sampler3->SetSeed(1000U);
+    sampler3->SetSeed(seed);
     //sampler3->SetDitheringOn();
     sampler3->Initialize();
 
     return sampler3.GetPointer();
 }
 
-typename PointSamplerBase<ImageType, itk::Image<bool, 2U>, ImageType>::Pointer CreateQuasiRandomPointSampler(ImagePointer im)
+typename PointSamplerBase<ImageType, itk::Image<bool, 2U>, ImageType>::Pointer CreateUniformPointSampler(ImagePointer im, unsigned int seed = 1000U)
+{
+    using PointSamplerType = PointSamplerBase<ImageType, itk::Image<bool, 2U>, ImageType>;
+    using PointSamplerPointer = typename PointSamplerType::Pointer;
+
+    PointSamplerPointer sampler1 = UniformPointSampler<ImageType, itk::Image<bool, 2U>, ImageType>::New().GetPointer();
+    sampler1->SetImage(im);
+    sampler1->Initialize();
+    sampler1->SetSeed(seed);
+
+    return sampler1.GetPointer();
+}
+
+typename PointSamplerBase<ImageType, itk::Image<bool, 2U>, ImageType>::Pointer CreateQuasiRandomPointSampler(ImagePointer im, unsigned int seed = 1000U)
 {
     using PointSamplerType = PointSamplerBase<ImageType, itk::Image<bool, 2U>, ImageType>;
     using PointSamplerPointer = typename PointSamplerType::Pointer;
@@ -98,19 +111,20 @@ typename PointSamplerBase<ImageType, itk::Image<bool, 2U>, ImageType>::Pointer C
     PointSamplerPointer sampler1 = QuasiRandomPointSampler<ImageType, itk::Image<bool, 2U>, ImageType>::New().GetPointer();
     sampler1->SetImage(im);
     sampler1->Initialize();
+    sampler1->SetSeed(seed);
 
     return sampler1.GetPointer();
 }
 
-ImagePointer MakeTestImage(unsigned int xpos, unsigned int ypos, unsigned int xsz, unsigned int ysz) {
+ImagePointer MakeTestImage(unsigned int xpos1, unsigned int ypos1, unsigned xpos2, unsigned int ypos2, unsigned int xsz, unsigned int ysz, unsigned int imsize) {
     ImageType::RegionType region;
     ImageType::IndexType index;
     ImageType::SizeType size;
 
     index[0] = 0;
     index[1] = 0;
-    size[0] = 256;//64;
-    size[1] = 256;//64;
+    size[0] = imsize;//64;
+    size[1] = imsize;//64;
 
     region.SetIndex(index);
     region.SetSize(size);
@@ -122,8 +136,8 @@ ImagePointer MakeTestImage(unsigned int xpos, unsigned int ypos, unsigned int xs
     image->FillBuffer(0.0f);
 
     double valacc = 0.0;
-    for(unsigned int i = ypos; i < ypos + ysz; ++i) {
-        for(unsigned int j = xpos; j < xpos + xsz; ++j) {
+    for(unsigned int i = ypos1; i < ypos1 + ysz; ++i) {
+        for(unsigned int j = xpos1; j < xpos1 + xsz; ++j) {
             ImageType::IndexType ind;
             ind[0] = j;
             ind[1] = i;
@@ -132,16 +146,50 @@ ImagePointer MakeTestImage(unsigned int xpos, unsigned int ypos, unsigned int xs
         }
     }
 
+    for(unsigned int i = ypos1; i < ypos1 + ysz; ++i) {
+        for(unsigned int j = xpos1; j < xpos1 + xsz; ++j) {
+            ImageType::IndexType ind;
+            ind[0] = imsize-j-1;
+            ind[1] = imsize-i-1;
+            image->SetPixel(ind, 0.75f);
+            valacc += 0.75;
+        }
+    }
+
+    for(unsigned int i = ypos2; i < ypos2 + ysz; ++i) {
+        for(unsigned int j = xpos2; j < xpos2 + xsz; ++j) {
+            ImageType::IndexType ind;
+            ind[0] = j;
+            ind[1] = i;
+            image->SetPixel(ind, 0.5f);
+            valacc += 0.5;
+        }
+    }
+
+    for(unsigned int i = ypos2; i < ypos2 + ysz; ++i) {
+        for(unsigned int j = xpos2; j < xpos2 + xsz; ++j) {
+            ImageType::IndexType ind;
+            ind[0] = imsize-j-1;
+            ind[1] = imsize-i-1;
+            image->SetPixel(ind, 0.25f);
+            valacc += 0.25;
+        }
+    }
+
     std::cout << "Mean value [GT]: " << (valacc / (64*64)) << std::endl;
 
     return image;
 }
 
-double MeanAbsDiff(ImagePointer image1, ImagePointer image2)
+double MeanAbsDiff(ImagePointer image1, ImagePointer image2, ImagePointer* imageOut = nullptr)
 {
     using IPT = itk::IPT<float, 2U>;
 
     typename ImageType::Pointer diff = IPT::DifferenceImage(image1, image2);
+    if(imageOut != nullptr)
+    {
+        *imageOut = diff;
+    }
     typename IPT::ImageStatisticsData stats = IPT::ImageStatistics(diff);
 
     return stats.mean;
@@ -159,11 +207,13 @@ double MeanAbsDiff(ImagePointer image1, ImagePointer image2)
         }
         itk::MultiThreader::SetGlobalDefaultNumberOfThreads(threads);
 
-        ImagePointer refImage = MakeTestImage(5, 7, 10, 8);
-        ImagePointer floImage = MakeTestImage(9, 13, 8, 10);
+        constexpr unsigned int imsize = 128;
 
-        //IPT::SaveImageU8("./reftest.png", refImage);
-        //IPT::SaveImageU8("./flotest.png", floImage);
+        ImagePointer refImage = MakeTestImage(5, 7, 70, 50, 10, 8, imsize);
+        ImagePointer floImage = MakeTestImage(9, 13, 80, 55, 8, 10, imsize);
+
+        IPT::SaveImageU8("./reftest.png", refImage);
+        IPT::SaveImageU8("./flotest.png", floImage);
 
         using DistType = MCAlphaCutPointToSetDistance<ImageType, unsigned short>;
         using DistPointer = typename DistType::Pointer;
@@ -171,13 +221,13 @@ double MeanAbsDiff(ImagePointer image1, ImagePointer image2)
         DistPointer distStructRefImage = DistType::New();
         DistPointer distStructFloImage = DistType::New();
 
-        distStructRefImage->SetSampleCount(5U);
+        distStructRefImage->SetSampleCount(20U);
         distStructRefImage->SetImage(refImage);
         distStructRefImage->SetMaxDistance(0);
         distStructRefImage->SetApproximationThreshold(20.0);
         distStructRefImage->SetApproximationFraction(0.1);
 
-        distStructFloImage->SetSampleCount(5U);
+        distStructFloImage->SetSampleCount(20U);
         distStructFloImage->SetImage(floImage);
         distStructFloImage->SetMaxDistance(0);
         distStructFloImage->SetApproximationThreshold(20.0);
@@ -196,31 +246,45 @@ double MeanAbsDiff(ImagePointer image1, ImagePointer image2)
 
         using PointSamplerType = PointSamplerBase<ImageType, itk::Image<bool, 2U>, ImageType>;
         using PointSamplerPointer = typename PointSamplerType::Pointer;
-        constexpr double w = 0.5;
-        PointSamplerPointer sampler1 = CreateHybridPointSampler(refImage, w); //QuasiRandomPointSampler<ImageType, itk::Image<bool, 2U>, ImageType>::New().GetPointer();
-        //PointSamplerPointer sampler1 = CreateQuasiRandomPointSampler(refImage);
-        PointSamplerPointer sampler2 = CreateHybridPointSampler(floImage, w);
-        //PointSamplerPointer sampler2 = CreateQuasiRandomPointSampler(floImage);
+        PointSamplerPointer sampler1;
+        PointSamplerPointer sampler2;
 
-        /*sampler1->SetImage(refImage);
-        sampler1->Initialize();*/
-        //PointSamplerPointer sampler2 = CreateHybridPointSampler(floImage);//QuasiRandomPointSampler<ImageType, itk::Image<bool, 2U>, ImageType>::New().GetPointer();
-        /*sampler2->SetImage(floImage);
-        sampler2->Initialize();*/
+        constexpr unsigned int seed = 1000U;
+        constexpr unsigned int samplerMode = 0; // Select sampling mode here (0: hybrid, 1: quasi random, 2: uniform)
+
+        if(samplerMode == 0)
+        {
+            constexpr double w = 0.5;
+            sampler1 = CreateHybridPointSampler(refImage, w, seed);
+            sampler2 = CreateHybridPointSampler(floImage, w, seed);
+        } else if(samplerMode == 1)
+        {
+            sampler1 = CreateQuasiRandomPointSampler(refImage, seed);
+            sampler2 = CreateQuasiRandomPointSampler(floImage, seed);
+        } else if(samplerMode == 2)
+        {
+            sampler1 = CreateUniformPointSampler(refImage, seed);
+            sampler2 = CreateUniformPointSampler(floImage, seed);
+        }       
         
         reg->SetPointSamplerRefImage(sampler1);
         reg->SetPointSamplerFloImage(sampler2);
-        constexpr unsigned int gridPointCount = 24;
+        constexpr unsigned int gridPointCount = 18;
+        constexpr unsigned int sampleCount = 4096;
+        constexpr unsigned int iterations = 300U;
+        constexpr double learningRate = 0.5;
+        constexpr double momentum = 0.2;
+        constexpr double symmetryLambda = 0.05;
+
         reg->SetTransformRefToFlo(CreateBSplineTransform(refImage, gridPointCount));
         reg->SetTransformFloToRef(CreateBSplineTransform(floImage, gridPointCount));
 
-        reg->SetSampleCountRefToFlo(4096);
-        reg->SetSampleCountFloToRef(4096);
-        //reg->SetSampleCountRefToFlo(512);
-        //reg->SetSampleCountFloToRef(512);
-        reg->SetLearningRate(0.5);
-        reg->SetIterations(1000U);
-        reg->SetSymmetryLambda(0.025);
+        reg->SetSampleCountRefToFlo(sampleCount);
+        reg->SetSampleCountFloToRef(sampleCount);
+        reg->SetLearningRate(learningRate);
+        reg->SetMomentum(momentum);
+        reg->SetIterations(iterations);
+        reg->SetSymmetryLambda(symmetryLambda);
 
         std::cout << "Initializing" << std::endl;
         reg->Initialize();
@@ -237,45 +301,18 @@ double MeanAbsDiff(ImagePointer image1, ImagePointer image2)
         chronometer.Report(std::cout);
 
         TransformPointer t1 = reg->GetTransformRefToFlo();
-/*
-        for(unsigned int i = 0; i < t1->GetNumberOfParameters(); ++i)
-        {
-            if(i > 0 && i%count!=0)
-                std::cout << ", ";
-            std::cout << t1->GetParameters()[i];
-            if(i%count==count-1)
-                std::cout << std::endl;
-        }
-        std::cout << std::endl;
-*/
+
         ImagePointer transformedImage = ApplyTransform(refImage, floImage, t1, 0.0);
+        ImagePointer diffImage;
 
         char buf[64];
-        sprintf(buf, "%.15f", MeanAbsDiff(refImage, transformedImage));
+        sprintf(buf, "%.15f", MeanAbsDiff(refImage, transformedImage, &diffImage));
         std::cout << "Before diff: " << MeanAbsDiff(refImage, floImage) << std::endl;
         std::cout << "After diff:  " << buf << std::endl;
 
         std::cout << "Final Distance: " << reg->GetValue() << std::endl;
-/*
-        for(unsigned int i = 0; i < 64; ++i)
-        {
-            for(unsigned int j = 0; j < 64; ++j)
-            {
-                typename ImageType::IndexType index;
-                index[0] = j;
-                index[1] = i;
-                float value = transformedImage->GetPixel(index);
-                std::cout << value << ", ";
-            }
-        }*/
 
+        IPT::SaveImageU8("./transformeddiff.png", diffImage);
         IPT::SaveImageU8("./transformedtest.png", transformedImage);
-/*
-        auto qrand = QuasiRandomGenerator<1U>::New();
-        for(unsigned int i = 0; i < 1000; ++i)
-        {
-            itk::FixedArray<double, 1U> val = qrand->GetConstVariate(i+1);
-            std::cout << val[0] << ", ";
-        }*/
     }
 }
