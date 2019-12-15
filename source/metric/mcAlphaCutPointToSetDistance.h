@@ -100,15 +100,14 @@ inline double PerformEaseOut(double value, double easeOutThreshold)
 }
 
 template <unsigned int ImageDimension>
-inline double InterpolateDistances(itk::Vector<double, ImageDimension> frac, ValuedCornerPoints<ImageDimension>& distanceValues, itk::Vector<double, ImageDimension>& grad, double easeOutThreshold=0.5);
+inline double InterpolateDistancesWithGrad(itk::Vector<double, ImageDimension> frac, ValuedCornerPoints<ImageDimension>& distanceValues, itk::Vector<double, ImageDimension>& grad, double easeOutThreshold=0.5);
 
 // Linear interpolation
 template <>
-inline double InterpolateDistances<1U>(itk::Vector<double, 1U> frac, ValuedCornerPoints<1U>& distanceValues, itk::Vector<double, 1U>& grad, double easeOutThreshold) {
+inline double InterpolateDistancesWithGrad<1U>(itk::Vector<double, 1U> frac, ValuedCornerPoints<1U>& distanceValues, itk::Vector<double, 1U>& grad, double easeOutThreshold) {
   double xx = frac[0];
   double ixx = 1.0 - xx;
   double value = ixx * distanceValues.m_Values[0] + xx * distanceValues.m_Values[1];
-
 
   // Compute the scale to apply (initially at 1.0, since if no easing is applied,
   // the gradient should just be the average of two differences).
@@ -121,7 +120,7 @@ inline double InterpolateDistances<1U>(itk::Vector<double, 1U> frac, ValuedCorne
 
 // Bilinear interpolation
 template <>
-inline double InterpolateDistances<2U>(itk::Vector<double, 2U> frac, ValuedCornerPoints<2U>& distanceValues, itk::Vector<double, 2U>& grad, double easeOutThreshold) {
+inline double InterpolateDistancesWithGrad<2U>(itk::Vector<double, 2U> frac, ValuedCornerPoints<2U>& distanceValues, itk::Vector<double, 2U>& grad, double easeOutThreshold) {
   double xx = frac[0];
   double yy = frac[1];
   double ixx = 1.0 - xx;
@@ -156,7 +155,7 @@ inline double InterpolateDistances<2U>(itk::Vector<double, 2U> frac, ValuedCorne
 
 // Trilinear interpolation
 template <>
-inline double InterpolateDistances<3U>(itk::Vector<double, 3U> frac, ValuedCornerPoints<3U>& distanceValues, itk::Vector<double, 3U>& grad, double easeOutThreshold) {
+inline double InterpolateDistancesWithGrad<3U>(itk::Vector<double, 3U> frac, ValuedCornerPoints<3U>& distanceValues, itk::Vector<double, 3U>& grad, double easeOutThreshold) {
   double xx = frac[0];
   double yy = frac[1];
   double zz = frac[2];
@@ -327,27 +326,6 @@ inline unsigned int PruneLevelsLinear(const T* values, unsigned int start, unsig
   }
   return end;
 }
-
-template <typename T>
-unsigned int PruneLevelsBinary(const std::vector<T>& values, unsigned int start, unsigned int end, T val) {
-  if(start < end) {
-    if(values[end-1] <= val)
-      return end;
-    else
-      --end;
-  } 
-  while(start < end) {
-    unsigned int mid = start + (end-start)/2;
-    T midval = values[mid];
-    if(midval > val) {
-      end = mid;
-    } else {
-      start = mid + 1;
-    }
-  }
-  return end;
-}
-
 };
 
 //
@@ -726,7 +704,7 @@ public:
         cornerValues.m_Values[i] = cornerValues.m_Values[i] / m_SampleCount;
       }
 
-      valueOut = MCDSInternal::InterpolateDistances<ImageDimension>(frac, cornerValues, gradOut);
+      valueOut = MCDSInternal::InterpolateDistancesWithGrad<ImageDimension>(frac, cornerValues, gradOut);
 
       // Apply spacing to gradient
       typedef typename ImageType::SpacingType SpacingType;
