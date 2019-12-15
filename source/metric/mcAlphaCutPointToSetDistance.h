@@ -14,7 +14,6 @@
 
 #include "../common/quantization.h"
 #include "../samplers/valueSampler.h"
-//#include "samplers.h"
 
 // Debug flags
 //#define DEBUG_NODE_COUNTING_ENABLED
@@ -251,24 +250,6 @@ inline unsigned int LargestDimension(itk::Size<ImageDimension> &sz)
 }
 
 template <typename IndexType, typename SizeType, unsigned int ImageDimension>
-inline unsigned int SplitRectangle(IndexType index, SizeType size, IndexType& midIndexOut, SizeType& szOut1, SizeType& szOut2) {
-  midIndexOut = index;
-
-  unsigned int selIndex = MCDSInternal::LargestDimension<ImageDimension>(size);
-  unsigned int maxSz = size[selIndex];
-  unsigned int halfMaxSz = maxSz / 2;
-
-  midIndexOut[selIndex] = index[selIndex] + halfMaxSz;
-  szOut1 = size;
-  szOut2 = size;
-
-  szOut1[selIndex] = halfMaxSz;
-  szOut2[selIndex] = maxSz - halfMaxSz;
-
-  return selIndex;
-}
-
-template <typename IndexType, typename SizeType, unsigned int ImageDimension>
 unsigned int MaxNodeIndex(IndexType index, SizeType size, unsigned int nodeIndex) {
       if(PixelCount(size) <= 1U) {
         return nodeIndex;
@@ -307,17 +288,6 @@ inline double LowerBoundDistance(IndexType pnt, IndexType rectOrigin, SizeType r
     d += d_i*d_i;
   } 
   return d;
-}
-
-template <unsigned int ImageDimension>
-inline bool SizeIsEmpty(itk::Size<ImageDimension> &sz)
-{
-  for (unsigned int i = 0; i < ImageDimension; ++i)
-  {
-    if (sz[i] == 0U)
-      return true;
-  }
-  return false;
 }
 
 template <typename T>
