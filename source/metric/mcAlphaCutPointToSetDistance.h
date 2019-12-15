@@ -16,6 +16,9 @@
 #include "../samplers/valueSampler.h"
 //#include "samplers.h"
 
+// Debug flags
+//#define DEBUG_NODE_COUNTING_ENABLED
+
 // A namespace collecting auxilliary data-structures and functions
 // used by the Monte Carlo distance framework.
 
@@ -557,7 +560,9 @@ public:
 
     m_Corners = MCDSInternal::ComputeCorners<IndexValueType, ImageType::ImageDimension>();
 
+#ifdef DEBUG_NODE_COUNTING_ENABLED
     m_DebugVisitCount = 0;
+#endif
 
     m_RawImagePtr = m_Image.GetPointer();
 
@@ -720,7 +725,9 @@ public:
 
     return true;
   }
+#ifdef DEBUG_NODE_COUNTING_ENABLED  
   mutable size_t m_DebugVisitCount;
+#endif
 protected:
   MCAlphaCutPointToSetDistance()
   {
@@ -864,7 +871,9 @@ protected:
       }
     }
 
+#ifdef DEBUG_NODE_COUNTING_ENABLED
     unsigned int visitCount = 0;
+#endif
     while(true)
     {
       unsigned int npx = curStackNode.m_Size[0];
@@ -880,7 +889,9 @@ protected:
       // Is the node a leaf - compute distances
       if (npx == 1U)
       {
+#ifdef DEBUG_NODE_COUNTING_ENABLED
         ++visitCount;
+#endif
 
         itk::Point<double, ImageDimension> leafPoint;
         for(unsigned int j = 0; j < ImageDimension; ++j)
@@ -1058,7 +1069,9 @@ protected:
       curStackNode = stackNodes[--stackIndex];
     } // End main "recursion" loop
 
-    //m_DebugVisitCount += visitCount;
+#ifdef DEBUG_NODE_COUNTING_ENABLED
+    m_DebugVisitCount += visitCount;
+#endif
   } // End of Search function
 
 }; // End of class
