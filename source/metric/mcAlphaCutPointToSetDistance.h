@@ -84,21 +84,44 @@ CornerPoints<T, Dim> ComputeCorners() {
   return res;
 }
 
+inline double PerformEaseOut(double value, double easeOutThreshold)
+{
+  // The threshold is an arbitrary threshold below which the magnitude of
+  // the gradient begins to be proportionally scaled to ease out gradients near
+  // objects.
+  if(value < easeOutThreshold)
+  {
+    return (value / easeOutThreshold);
+  }
+  else 
+  {
+    return 1.0;
+  }
+}
+
 template <unsigned int ImageDimension>
-inline double InterpolateDistances(itk::Vector<double, ImageDimension> frac, ValuedCornerPoints<ImageDimension>& distanceValues, itk::Vector<double, ImageDimension>& grad);
+inline double InterpolateDistances(itk::Vector<double, ImageDimension> frac, ValuedCornerPoints<ImageDimension>& distanceValues, itk::Vector<double, ImageDimension>& grad, double easeOutThreshold=0.5);
 
 // Linear interpolation
 template <>
-inline double InterpolateDistances<1U>(itk::Vector<double, 1U> frac, ValuedCornerPoints<1U>& distanceValues, itk::Vector<double, 1U>& grad) {
+inline double InterpolateDistances<1U>(itk::Vector<double, 1U> frac, ValuedCornerPoints<1U>& distanceValues, itk::Vector<double, 1U>& grad, double easeOutThreshold) {
   double xx = frac[0];
   double ixx = 1.0 - xx;
-  grad[0] = distanceValues.m_Values[1] - distanceValues.m_Values[0];
-  return ixx * distanceValues.m_Values[0] + xx * distanceValues.m_Values[1];
+  double value = ixx * distanceValues.m_Values[0] + xx * distanceValues.m_Values[1];
+
+
+  // Compute the scale to apply (initially at 1.0, since if no easing is applied,
+  // the gradient should just be the average of two differences).
+  double scale = PerformEaseOut(value, easeOutThreshold);
+
+  grad[0] = (distanceValues.m_Values[1] - distanceValues.m_Values[0]) * scale;
+
+  return value;
 }
 
 // Bilinear interpolation
 template <>
-inline double InterpolateDistances<2U>(itk::Vector<double, 2U> frac, ValuedCornerPoints<2U>& distanceValues, itk::Vector<double, 2U>& grad) {
+inline double InterpolateDistances<2U>(itk::Vector<double, 2U> frac, ValuedCornerPoints<2U>& distanceValues, itk::Vector<double, 2U>& grad, double easeOutThreshold) {
   double xx = frac[0];
   double yy = frac[1];
   double ixx = 1.0 - xx;
@@ -120,17 +143,9 @@ inline double InterpolateDistances<2U>(itk::Vector<double, 2U> frac, ValuedCorne
   //grad[1] = ixx * step_01_00 + xx * step_11_10;
   //return v_00 * ixx * iyy + v_10 * xx * iyy + v_01 * ixx * yy + v_11 * xx * yy;
   
-  // The 0.5 threshold is an arbitrary threshold below which the magnitude of
-  // the gradient begins to be proportionally scaled to ease out gradients near
-  // objects.
-  constexpr double threshold = 0.5;
-  constexpr double threshold_rec = 1.0/threshold;
-
   // Compute the scale to apply (initially at 0.5, since if no easing is applied,
   // the gradient should just be the average of two differences).
-  double scale = 0.5;
-  if(value < threshold)
-    scale *= (value*threshold_rec);
+  double scale = 0.5 * PerformEaseOut(value, easeOutThreshold);
   
   // Compute the gradient vector at the mid-point between the grid points.
   grad[0] = (step_10_00 + step_11_01) * scale;
@@ -141,7 +156,7 @@ inline double InterpolateDistances<2U>(itk::Vector<double, 2U> frac, ValuedCorne
 
 // Trilinear interpolation
 template <>
-inline double InterpolateDistances<3U>(itk::Vector<double, 3U> frac, ValuedCornerPoints<3U>& distanceValues, itk::Vector<double, 3U>& grad) {
+inline double InterpolateDistances<3U>(itk::Vector<double, 3U> frac, ValuedCornerPoints<3U>& distanceValues, itk::Vector<double, 3U>& grad, double easeOutThreshold) {
   double xx = frac[0];
   double yy = frac[1];
   double zz = frac[2];
@@ -194,17 +209,9 @@ inline double InterpolateDistances<3U>(itk::Vector<double, 3U> frac, ValuedCorne
   //grad[1] = ((v_010 - v_000) * ixx + (v_110 - v_100) * xx) * izz + ((v_011 - v_001) * ixx + (v_111 - v_101) * xx) * zz;
   //grad[2] = ((v_001 - v_000) * ixx + (v_101 - v_100) * xx) * iyy + ((v_011 - v_010) * ixx + (v_111 - v_110) * xx) * yy;
   
-  // The 0.5 threshold is an arbitrary threshold below which the magnitude of
-  // the gradient begins to be proportionally scaled to ease out gradients near
-  // objects.
-  constexpr double threshold = 0.5;
-  constexpr double threshold_rec = 1.0/threshold;
-
   // Compute the scale to apply (initially at 0.25, since if no easing is applied,
   // the gradient should just be the average of four differences).
-  double scale = 0.25;
-  if(value < threshold)
-    scale *= (value*threshold_rec);
+  double scale = 0.25 * PerformEaseOut(value, easeOutThreshold);
 
   // Compute the gradient vector at the mid-point between the grid points.
   grad[0] = (((v_100 - v_000) + (v_110 - v_010)) + ((v_101 - v_001) + (v_111 - v_011))) * scale;
