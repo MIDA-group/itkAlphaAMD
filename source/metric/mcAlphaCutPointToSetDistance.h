@@ -18,6 +18,9 @@
 // Debug flags
 //#define DEBUG_NODE_COUNTING_ENABLED
 
+// Linear interpolation. alpha=0 : a, alpha=1 : b
+#define LERP(a, b, alpha) ((a) + alpha * ((b)-(a)))
+
 // A namespace collecting auxilliary data-structures and functions
 // used by the Monte Carlo distance framework.
 
@@ -108,8 +111,8 @@ inline double InterpolateDistancesWithGrad(itk::Vector<double, ImageDimension> f
 template <>
 inline double InterpolateDistancesWithGrad<1U>(itk::Vector<double, 1U> frac, ValuedCornerPoints<1U>& distanceValues, itk::Vector<double, 1U>& grad, double easeOutThreshold) {
   double xx = frac[0];
-  double ixx = 1.0 - xx;
-  double value = ixx * distanceValues.m_Values[0] + xx * distanceValues.m_Values[1];
+  //double ixx = 1.0 - xx;
+  double value = LERP(distanceValues.m_Values[0], distanceValues.m_Values[1], xx); //ixx * distanceValues.m_Values[0] + xx * distanceValues.m_Values[1];
 
   // Compute the scale to apply (initially at 1.0, since if no easing is applied,
   // the gradient should just be the average of two differences).
@@ -125,24 +128,26 @@ template <>
 inline double InterpolateDistancesWithGrad<2U>(itk::Vector<double, 2U> frac, ValuedCornerPoints<2U>& distanceValues, itk::Vector<double, 2U>& grad, double easeOutThreshold) {
   double xx = frac[0];
   double yy = frac[1];
-  double ixx = 1.0 - xx;
-  double iyy = 1.0 - yy;
+  //double ixx = 1.0 - xx;
+  //double iyy = 1.0 - yy;
 
   double v_00 = distanceValues.m_Values[0];
   double v_10 = distanceValues.m_Values[1];
   double v_01 = distanceValues.m_Values[2];
   double v_11 = distanceValues.m_Values[3];
 
-  double step_10_00 = v_10 - v_00;
-  double step_11_01 = v_11 - v_01;
-  double step_01_00 = v_01 - v_00;
-  double step_11_10 = v_11 - v_10;
+  const double step_10_00 = v_10 - v_00;
+  const double step_11_01 = v_11 - v_01;
+  const double step_01_00 = v_01 - v_00;
+  const double step_11_10 = v_11 - v_10;
   
   // Compute the value with bilinear interpolation
-  const double value = v_00 * ixx * iyy + v_10 * xx * iyy + v_01 * ixx * yy + v_11 * xx * yy;
-  //grad[0] = iyy * step_10_00 + yy * step_11_01;
-  //grad[1] = ixx * step_01_00 + xx * step_11_10;
-  //return v_00 * ixx * iyy + v_10 * xx * iyy + v_01 * ixx * yy + v_11 * xx * yy;
+  //const double val1 = LERP(v_00, v_10, xx);
+  //const double val2 = LERP(v_01, v_11, xx);
+  const double val1 = v_00 + step_10_00 * xx;
+  const double val2 = v_01 + step_11_01 * xx;
+  const double value = LERP(val1, val2, yy);
+  //const double value = v_00 * ixx * iyy + v_10 * xx * iyy + v_01 * ixx * yy + v_11 * xx * yy;
   
   // Compute the scale to apply (initially at 0.5, since if no easing is applied,
   // the gradient should just be the average of two differences).
