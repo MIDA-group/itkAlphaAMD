@@ -66,7 +66,7 @@ typename ImageType::Pointer ApplyTransform(ImagePointer refImage, ImagePointer f
     return resample->GetOutput();
 }
 
-typename PointSamplerBase<ImageType, itk::Image<bool, 2U>, ImageType>::Pointer CreateHybridPointSampler(ImagePointer im, double w1 = 0.5, unsigned int seed = 1000U)
+typename PointSamplerBase<ImageType, itk::Image<bool, 2U>, ImageType>::Pointer CreateHybridPointSampler(ImagePointer im, double w1 = 0.5, bool binaryMode = false, unsigned int seed = 1000U)
 {
     using PointSamplerType = PointSamplerBase<ImageType, itk::Image<bool, 2U>, ImageType>;
     using PointSamplerPointer = typename PointSamplerType::Pointer;
@@ -74,12 +74,9 @@ typename PointSamplerBase<ImageType, itk::Image<bool, 2U>, ImageType>::Pointer C
     GradientWeightedPointSampler<ImageType, itk::Image<bool, 2U>, ImageType>::Pointer sampler2 = GradientWeightedPointSampler<ImageType, itk::Image<bool, 2U>, ImageType>::New().GetPointer();
     typename HybridPointSampler<ImageType, itk::Image<bool, 2U>, ImageType>::Pointer sampler3 = HybridPointSampler<ImageType, itk::Image<bool, 2U>, ImageType>::New();
     sampler2->SetSigma(1.0);
-/*    sampler1->SetImage(im);
-    sampler1->SetThreads(32U);
-    sampler1->Initialize();
-    sampler2->SetImage(im);
-    sampler2->SetThreads(32U);
-    sampler2->Initialize();*/
+    sampler2->SetBinaryMode(binaryMode);
+    //sampler2->SetTolerance(1e-3);
+
     sampler3->AddSampler(sampler1, w1);
     sampler3->AddSampler(sampler2.GetPointer(), 1.0-w1);
     sampler3->SetImage(im);
@@ -221,13 +218,13 @@ double MeanAbsDiff(ImagePointer image1, ImagePointer image2, ImagePointer* image
         DistPointer distStructRefImage = DistType::New();
         DistPointer distStructFloImage = DistType::New();
 
-        distStructRefImage->SetSampleCount(20U);
+        distStructRefImage->SetSampleCount(8U);
         distStructRefImage->SetImage(refImage);
         distStructRefImage->SetMaxDistance(0);
         distStructRefImage->SetApproximationThreshold(20.0);
         distStructRefImage->SetApproximationFraction(0.1);
 
-        distStructFloImage->SetSampleCount(20U);
+        distStructFloImage->SetSampleCount(8U);
         distStructFloImage->SetImage(floImage);
         distStructFloImage->SetMaxDistance(0);
         distStructFloImage->SetApproximationThreshold(20.0);
@@ -250,13 +247,14 @@ double MeanAbsDiff(ImagePointer image1, ImagePointer image2, ImagePointer* image
         PointSamplerPointer sampler2;
 
         constexpr unsigned int seed = 1000U;
+        constexpr bool gradientWeightedSamplerBinaryMode = false;
         constexpr unsigned int samplerMode = 0; // Select sampling mode here (0: hybrid, 1: quasi random, 2: uniform)
 
         if(samplerMode == 0)
         {
             constexpr double w = 0.5;
-            sampler1 = CreateHybridPointSampler(refImage, w, seed);
-            sampler2 = CreateHybridPointSampler(floImage, w, seed);
+            sampler1 = CreateHybridPointSampler(refImage, w, gradientWeightedSamplerBinaryMode, seed);
+            sampler2 = CreateHybridPointSampler(floImage, w, gradientWeightedSamplerBinaryMode, seed);
         } else if(samplerMode == 1)
         {
             sampler1 = CreateQuasiRandomPointSampler(refImage, seed);
@@ -269,11 +267,11 @@ double MeanAbsDiff(ImagePointer image1, ImagePointer image2, ImagePointer* image
         
         reg->SetPointSamplerRefImage(sampler1);
         reg->SetPointSamplerFloImage(sampler2);
-        constexpr unsigned int gridPointCount = 18;
+        constexpr unsigned int gridPointCount = 20;
         constexpr unsigned int sampleCount = 4096;
-        constexpr unsigned int iterations = 300U;
-        constexpr double learningRate = 0.5;
-        constexpr double momentum = 0.2;
+        constexpr unsigned int iterations = 1000U;
+        constexpr double learningRate = 0.8;
+        constexpr double momentum = 0.1;
         constexpr double symmetryLambda = 0.05;
 
         reg->SetTransformRefToFlo(CreateBSplineTransform(refImage, gridPointCount));
@@ -305,7 +303,7 @@ double MeanAbsDiff(ImagePointer image1, ImagePointer image2, ImagePointer* image
         ImagePointer transformedImage = ApplyTransform(refImage, floImage, t1, 0.0);
         ImagePointer diffImage;
 
-        char buf[64];
+        char buf[64]; // C-strings on the stack like this are not good...
         sprintf(buf, "%.15f", MeanAbsDiff(refImage, transformedImage, &diffImage));
         std::cout << "Before diff: " << MeanAbsDiff(refImage, floImage) << std::endl;
         std::cout << "After diff:  " << buf << std::endl;

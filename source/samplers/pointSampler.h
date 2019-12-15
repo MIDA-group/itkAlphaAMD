@@ -413,6 +413,16 @@ public:
         m_Tolerance = tol;
     }
 
+    virtual bool GetBinaryMode() const
+    {
+        return m_BinaryMode;
+    }
+
+    virtual void SetBinaryMode(bool mode)
+    {
+        m_BinaryMode = mode;
+    }
+
     virtual void Initialize() {
         Superclass::Initialize();
 
@@ -470,6 +480,9 @@ public:
 
                 if(value > tolerance)
                 {
+                    if(m_BinaryMode)
+                        value = 1.0;
+
                     IndexType curIndex = it.GetIndex();
                     totalValue += value;
 
@@ -493,6 +506,9 @@ public:
 
             if(value > tolerance)
             {
+                if(m_BinaryMode)
+                    value = 1.0;
+
                 IndexType curIndex = it.GetIndex();
                 totalValue += value;
                 m_Prob.push_back(totalValue);
@@ -543,6 +559,7 @@ protected:
     GradientWeightedPointSampler() {
         m_Sigma = 0.0;
         m_Tolerance = static_cast<ValueType>(1e-5);
+        m_BinaryMode = false;
     }
 
     size_t SearchCumProb(ValueType p) {
@@ -583,6 +600,7 @@ protected:
     std::vector<IndexType> m_Indices;
     double m_Sigma;
     ValueType m_Tolerance;
+    bool m_BinaryMode;
 }; // End of class UniformPointSampler
 
 //

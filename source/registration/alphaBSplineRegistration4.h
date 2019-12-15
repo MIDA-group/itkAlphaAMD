@@ -170,8 +170,10 @@ private:
   void
   ThreadedExecution(const DomainType & subDomain, const itk::ThreadIdType threadId) override
   {
-      //std::cout << "Thread: " << threadId << std::endl;
-    // Local versions of the data
+    // Here we set the number of points which will be sampled in one batch by this threader.
+    constexpr unsigned int BATCH_SIZE = 32U;
+
+    // Store local versions of the data
     ThreadStateType* state = &this->m_Associate->m_ThreadData[threadId];
     itk::IndexValueType refToFloSampleCount = static_cast<itk::IndexValueType>(this->m_Associate->m_RefToFloSampleCount);
     itk::IndexValueType floToRefSampleCount = static_cast<itk::IndexValueType>(this->m_Associate->m_FloToRefSampleCount);
@@ -199,6 +201,7 @@ private:
     ParameterIndexArrayType& paramIndicesRefToFlo = state->m_ParamIndicesRefToFlo;
     ParameterIndexArrayType& paramIndicesFloToRef = state->m_ParamIndicesFloToRef;
 
+    // Initialize the thread state for this iteration
     state->StartIteration();
 
     FixedPointNumber distanceRefToFloAcc = 0;
@@ -212,28 +215,36 @@ private:
 
     unsigned int endPointIndex = 0U;
     unsigned int totalCount = refToFloSampleCount + floToRefSampleCount;
-    constexpr unsigned int BATCH_SIZE = 32U;
 
+    // Either use the dynamic load allocation system, or fall back
+    // on the static domain-partitioning mode.
+    constexpr bool USE_DYNAMIC_LOAD_ALLOCATION = true;
+    
     while(endPointIndex < totalCount)
-    {        
-#define USE_DYNAMIC_LOAD_ALLOCATION
+    {
+        unsigned int loopPointIndex;
+        unsigned int end1;
+        unsigned int end2;
 
-#ifdef USE_DYNAMIC_LOAD_ALLOCATION
-        unsigned int loopPointIndex = this->m_AtomicPointIndex.fetch_add(BATCH_SIZE); //, std::memory_order_acq_rel
-        endPointIndex = loopPointIndex + BATCH_SIZE;
-        if(endPointIndex > totalCount)
+        if(USE_DYNAMIC_LOAD_ALLOCATION)
         {
+            loopPointIndex = this->m_AtomicPointIndex.fetch_add(BATCH_SIZE); //, std::memory_order_acq_rel
+            endPointIndex = loopPointIndex + BATCH_SIZE;
+            if(endPointIndex > totalCount)
+            {
+                endPointIndex = totalCount;
+            }
+
+            end1 = endPointIndex;
+        }
+        else
+        {
+            loopPointIndex = subDomain[0];
+            end1 = subDomain[1]+1;
             endPointIndex = totalCount;
         }
 
-        unsigned int end1 = endPointIndex;
-#else
-        unsigned int loopPointIndex = subDomain[0];
-        unsigned int end1 = subDomain[1]+1;
-        endPointIndex = totalCount;
-#endif
-
-    unsigned int end2 = end1;
+    end2 = end1;
     if(end1>refToFloSampleCount)
     {
         end1 = refToFloSampleCount;
@@ -519,6 +530,9 @@ private:
   void
   ThreadedExecution(const DomainType & subDomain, const itk::ThreadIdType threadId) override
   {
+    // Here we set the number of transform parameter which will be processed in one batch by this threader.
+    constexpr unsigned int BATCH_SIZE = 8U;
+
     // The number of threads used for the previous step
     unsigned int threadsUsed = this->m_Associate->m_ThreadsUsed;
     unsigned int paramNumRefToFlo = this->m_Associate->m_TransformRefToFlo->GetNumberOfParameters();
@@ -550,11 +564,9 @@ private:
 
     unsigned int localPointIndex = 0U;
     unsigned int localTotalCount = this->m_TotalCount;
-    constexpr unsigned int BATCH_SIZE = 8U;
 
     while(localPointIndex < localTotalCount)
     {
-
         unsigned int startPointIndex = this->m_AtomicPointIndex.fetch_add(BATCH_SIZE, std::memory_order_acq_rel);
         unsigned int endPointIndex = startPointIndex + BATCH_SIZE;
         if(endPointIndex > localTotalCount)
@@ -584,8 +596,6 @@ private:
 
         const double prevVal = derRefToFlo[localIndex];
         const double normalized = DoubleFromFixedPoint(derVal) / (DoubleFromFixedPoint(weightVal)+eps);
-        //if(fabs(normalized) > 1e-5)
-        //    std::cout << ii << ": " << normalized << std::endl;
         derRefToFlo[localIndex] = prevVal * momentum + invMomentum * normalized;
     }
     for (; ii < end2; ++ii)
@@ -601,8 +611,6 @@ private:
 
         const double prevVal = derFloToRef[localIndex];
         const double normalized = DoubleFromFixedPoint(derVal) / (DoubleFromFixedPoint(weightVal)+eps);
-        //if(fabs(normalized) > 1e-5)
-        //    std::cout << ii << ": " << normalized << std::endl;
         derFloToRef[localIndex] = prevVal * momentum + invMomentum * normalized;
     }
 
@@ -816,8 +824,6 @@ protected:
         m_Momentum = 0.1;
         m_LearningRate = 1.0;
         m_SymmetryLambda = 0.05;
-        m_DoMultiThreadValueAndDerivative = true;
-        m_DoMultiThreadStep = true;
 
         m_RefToFloSampleCount = 4096;
         m_FloToRefSampleCount = 4096;
@@ -843,32 +849,36 @@ protected:
     DistPointer m_DistDataStructRefImage;
     DistPointer m_DistDataStructFloImage;
 
+    // Objective function and optimization parameters
     double m_Momentum;
     double m_LearningRate;
     double m_SymmetryLambda;
+
+    // Sampling parameters
+    unsigned int m_RefToFloSampleCount;
+    unsigned int m_FloToRefSampleCount;
+
+    // Output and reporting settings
+    unsigned int m_PrintInterval;
+
     // Current state
     double m_Value;
 
-    unsigned int m_PrintInterval;
-
     // Thread-local data for value and derivatives computation
     std::unique_ptr<ThreadStateType[]> m_ThreadData;
+
+    // Threads used is assigned by the VAD threader and used by the Step threader
     unsigned int m_ThreadsUsed;
+
+    // Threaders
     VADThreaderPointer m_VADThreader;
     StepThreaderPointer m_StepThreader;
 
     unsigned int m_Iterations;
 
-    unsigned int m_RefToFloSampleCount;
-    unsigned int m_FloToRefSampleCount;
-
     // Current/last derivative
     DerivativeType m_DerivativeRefToFlo;
     DerivativeType m_DerivativeFloToRef;
-
-    // Enable/disable threading
-    bool m_DoMultiThreadValueAndDerivative;
-    bool m_DoMultiThreadStep;
 
     friend class AlphaBSplineRegistrationVADThreader<Self, ImageType, TransformType, DistType>;
     friend class AlphaBSplineRegistrationStepThreader<Self, ImageType, TransformType, DistType>;
