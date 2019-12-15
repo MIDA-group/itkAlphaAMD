@@ -9,9 +9,13 @@
 #include "itkDomainThreader.h"
 #include "itkThreadedIndexedContainerPartitioner.h"
 #include "itkBSplineTransform.h"
-#include "itkTimeProbesCollectorBase.h"
 
-#include "../samplers/pointSampler.h"
+#include <atomic>
+
+#include "../common/quantization.h"
+
+// Point sampler methods
+#include "../samplers/pointSamplerBase.h"
 
 template <typename TImageType, typename TDistType, unsigned int TSplineOrder>
 struct AlphaBSplineRegistrationThreadState
@@ -35,11 +39,10 @@ struct AlphaBSplineRegistrationThreadState
     using DistEvalContextType = typename DistType::EvalContextType;
     using DistEvalContextPointer = typename DistEvalContextType::Pointer;
 
-    DerivativeType m_DerivativeRefToFlo;
-    DerivativeType m_DerivativeFloToRef;
-
-    DerivativeType m_WeightsRefToFlo;
-    DerivativeType m_WeightsFloToRef;
+    std::unique_ptr<FixedPointNumber[]> m_DerivativeRefToFlo;
+    std::unique_ptr<FixedPointNumber[]> m_DerivativeFloToRef;
+    std::unique_ptr<FixedPointNumber[]> m_WeightsRefToFlo;
+    std::unique_ptr<FixedPointNumber[]> m_WeightsFloToRef;
 
     WeightsType m_ParamWeightsRefToFlo;
     WeightsType m_ParamWeightsFloToRef;
@@ -47,58 +50,54 @@ struct AlphaBSplineRegistrationThreadState
     ParameterIndexArrayType m_ParamIndicesRefToFlo;
     ParameterIndexArrayType m_ParamIndicesFloToRef;
 
-    double m_DistanceRefToFlo;
-    double m_DistanceFloToRef;
-    double m_WeightRefToFlo;
-    double m_WeightFloToRef;
+    FixedPointNumber m_DistanceRefToFlo;
+    FixedPointNumber m_DistanceFloToRef;
+    FixedPointNumber m_WeightRefToFlo;
+    FixedPointNumber m_WeightFloToRef;
 
     unsigned int m_ParamNumRefToFlo;
     unsigned int m_ParamNumFloToRef;
 
-    unsigned int m_SupportSize;
+    unsigned int m_SupportSizeRefToFlo;
+    unsigned int m_SupportSizeFloToRef;
 
     DistEvalContextPointer m_DistEvalContextRefImage;
     DistEvalContextPointer m_DistEvalContextFloImage;
 
-    void Initialize(unsigned int paramNumRefToFlo, unsigned int paramNumFloToRef, unsigned int supportSize, DistEvalContextPointer distEvalContextRefImage, DistEvalContextPointer distEvalContextFloImage)
+    void Initialize(unsigned int paramNumRefToFlo, unsigned int paramNumFloToRef, unsigned int supportSizeRefToFlo, unsigned int supportSizeFloToRef, DistEvalContextPointer distEvalContextRefImage, DistEvalContextPointer distEvalContextFloImage)
     {
         m_ParamNumRefToFlo = paramNumRefToFlo;
         m_ParamNumFloToRef = paramNumFloToRef;
-        m_SupportSize = supportSize;
+        m_SupportSizeRefToFlo = supportSizeRefToFlo;
+        m_SupportSizeFloToRef = supportSizeFloToRef;
 
         m_DistEvalContextRefImage = distEvalContextRefImage;
         m_DistEvalContextFloImage = distEvalContextFloImage;
 
-        m_DerivativeRefToFlo.SetSize(m_ParamNumRefToFlo);
-        m_WeightsRefToFlo.SetSize(m_ParamNumRefToFlo);
+        m_DerivativeRefToFlo.reset(new FixedPointNumber[m_ParamNumRefToFlo]);
+        m_WeightsRefToFlo.reset(new FixedPointNumber[m_ParamNumRefToFlo]);       
+        m_DerivativeFloToRef.reset(new FixedPointNumber[m_ParamNumFloToRef]);
+        m_WeightsFloToRef.reset(new FixedPointNumber[m_ParamNumFloToRef]);
 
-        m_DerivativeFloToRef.SetSize(m_ParamNumFloToRef);
-        m_WeightsFloToRef.SetSize(m_ParamNumRefToFlo);
-
-        m_ParamWeightsRefToFlo.SetSize(supportSize);
-        m_ParamWeightsFloToRef.SetSize(supportSize);
-        m_ParamIndicesRefToFlo.SetSize(supportSize);
-        m_ParamIndicesFloToRef.SetSize(supportSize);
+        m_ParamWeightsRefToFlo.SetSize(supportSizeRefToFlo);
+        m_ParamWeightsFloToRef.SetSize(supportSizeFloToRef);
+        m_ParamIndicesRefToFlo.SetSize(supportSizeRefToFlo);
+        m_ParamIndicesFloToRef.SetSize(supportSizeFloToRef);
     }
 
-    void StartIteration()
+    inline void StartIteration()
     {
-        m_WeightRefToFlo = 0.0;
-        m_WeightFloToRef = 0.0;
-        m_DistanceRefToFlo = 0.0;
-        m_DistanceFloToRef = 0.0;
-        m_WeightsRefToFlo.Fill(0);
-        m_WeightsFloToRef.Fill(0);
-        m_DerivativeRefToFlo.Fill(0);
-        m_DerivativeFloToRef.Fill(0);
-    }
-};
+        //m_WeightRefToFlo = 0;
+        //m_WeightFloToRef = 0;
+        //m_DistanceRefToFlo = 0;
+        //m_DistanceFloToRef = 0;
 
-template <typename ValueType, unsigned int Dim>
-struct SymmetryLossTerm
-{
-	ValueType value;
-	itk::Vector<ValueType, Dim> grad;
+        // Set derivative and weight accumulators to zero
+        memset(m_DerivativeRefToFlo.get(), 0, sizeof(FixedPointNumber) * m_ParamNumRefToFlo);
+        memset(m_WeightsRefToFlo.get(), 0, sizeof(FixedPointNumber) * m_ParamNumRefToFlo);
+        memset(m_DerivativeFloToRef.get(), 0, sizeof(FixedPointNumber) * m_ParamNumFloToRef);
+        memset(m_WeightsFloToRef.get(), 0, sizeof(FixedPointNumber) * m_ParamNumFloToRef);
+    }
 };
 
 template <class TAssociate, class TImageType, class TTransformType, class TDistType>
@@ -135,8 +134,6 @@ public:
   using PointSamplerPointer = typename PointSamplerType::Pointer;
   using PointSampleType = typename TAssociate::PointSampleType;
 
-  using SymmetryLossType = SymmetryLossTerm<double, TAssociate::ImageDimension>;
-
   constexpr static unsigned int ImageDimension = TAssociate::ImageDimension;
 
   // This creates the ::New() method for instantiating the class.
@@ -144,13 +141,18 @@ public:
 
 protected:
   // We need a constructor for the itkNewMacro.
-  AlphaBSplineRegistrationVADThreader() = default;
+  AlphaBSplineRegistrationVADThreader()
+  {
+      ;
+  }
 
 private:
+  std::atomic<unsigned int> m_AtomicPointIndex;
+
   void
   BeforeThreadedExecution() override
   {
-      std::vector<ThreadStateType>& threadStates = this->m_Associate->m_ThreadData;
+      //std::vector<ThreadStateType>& threadStates = this->m_Associate->m_ThreadData;
     // Resize our per-thread data structures to the number of threads that we
     // are actually going to use.  At this point the number of threads that
     // will be used have already been calculated and are available.  The number
@@ -159,152 +161,232 @@ private:
     // number of cells in the CellContainer is smaller than the number of cores
     // available.
     const itk::ThreadIdType numberOfThreads = this->GetNumberOfThreadsUsed();
+    // Check here that we have enough thread states
     //const itk::ThreadIdType numberOfThreads = this->GetNumberOfWorkUnitsUsed();
 
-    assert(numberOfThreads <= threadStates.size());
-    //std::cout << "Number of threads: " << numberOfThreads << std::endl;
-
+    m_AtomicPointIndex = 0U;
   }
 
   void
   ThreadedExecution(const DomainType & subDomain, const itk::ThreadIdType threadId) override
   {
-      //std::cout << "Thread: " << threadId << std::endl;
+    // Here we set the number of points which will be sampled in one batch by this threader.
+    constexpr unsigned int BATCH_SIZE = 32U;
+
+    // Store local versions of the data
     ThreadStateType* state = &this->m_Associate->m_ThreadData[threadId];
     itk::IndexValueType refToFloSampleCount = static_cast<itk::IndexValueType>(this->m_Associate->m_RefToFloSampleCount);
     itk::IndexValueType floToRefSampleCount = static_cast<itk::IndexValueType>(this->m_Associate->m_FloToRefSampleCount);
 
+    unsigned int supportSizeRefToFlo = state->m_SupportSizeRefToFlo;
+    unsigned int supportSizeFloToRef = state->m_SupportSizeFloToRef;
+
     TransformType* transformRefToFlo = this->m_Associate->m_TransformRefToFloRawPtr;
     TransformType* transformFloToRef = this->m_Associate->m_TransformFloToRefRawPtr;
+    PointSamplerType* pointSamplerRef = this->m_Associate->m_PointSamplerRefImage.GetPointer();
+    PointSamplerType* pointSamplerFlo = this->m_Associate->m_PointSamplerFloImage.GetPointer();
 
+    FixedPointNumber* derivativeRefToFlo = state->m_DerivativeRefToFlo.get();
+    FixedPointNumber* derivativeFloToRef = state->m_DerivativeFloToRef.get();
+    FixedPointNumber* weightsRefToFlo = state->m_WeightsRefToFlo.get();
+    FixedPointNumber* weightsFloToRef = state->m_WeightsFloToRef.get();
+
+    DistType* distStructRefImage = this->m_Associate->m_DistDataStructRefImage.GetPointer();
+    DistType* distStructFloImage = this->m_Associate->m_DistDataStructFloImage.GetPointer();
+    DistEvalContextType* distEvalContextRefImage = state->m_DistEvalContextRefImage.GetPointer();
+    DistEvalContextType* distEvalContextFloImage = state->m_DistEvalContextFloImage.GetPointer();
+
+    WeightsType& paramWeightsRefToFlo = state->m_ParamWeightsRefToFlo;
+    WeightsType& paramWeightsFloToRef = state->m_ParamWeightsFloToRef;
+    ParameterIndexArrayType& paramIndicesRefToFlo = state->m_ParamIndicesRefToFlo;
+    ParameterIndexArrayType& paramIndicesFloToRef = state->m_ParamIndicesFloToRef;
+
+    // Initialize the thread state for this iteration
     state->StartIteration();
+
+    FixedPointNumber distanceRefToFloAcc = 0;
+    FixedPointNumber weightRefToFloAcc = 0;
+    FixedPointNumber distanceFloToRefAcc = 0;
+    FixedPointNumber weightFloToRefAcc = 0;
 
     PointSampleType pointSample;
 
-    double lambda = this->m_Associate->m_SymmetryLambda;
+    const double lambda = this->m_Associate->m_SymmetryLambda;
 
-    // Look only at the range of indices in the subDomain.
-    for (itk::IndexValueType ii = subDomain[0]; ii <= subDomain[1]; ++ii)
+    unsigned int endPointIndex = 0U;
+    unsigned int totalCount = refToFloSampleCount + floToRefSampleCount;
+
+    // Either use the dynamic load allocation system, or fall back
+    // on the static domain-partitioning mode.
+    constexpr bool USE_DYNAMIC_LOAD_ALLOCATION = true;
+    
+    while(endPointIndex < totalCount)
     {
-        //std::cout << ii << std::endl;
-        if(ii < refToFloSampleCount) {
-            // Reference to Floating sample
-            this->m_Associate->m_PointSamplerRefImage->Sample(threadId, pointSample);
-                
-            ComputePointValueAndDerivative(
-                pointSample,
-                this->m_Associate->m_DistDataStructFloImage.GetPointer(),
-                state->m_DistEvalContextFloImage.GetPointer(),
-                transformRefToFlo,
-                transformFloToRef,
-                state->m_DistanceRefToFlo,
-                state->m_WeightRefToFlo,
-                state->m_DerivativeRefToFlo,
-                state->m_DerivativeFloToRef,
-                state->m_WeightsRefToFlo,
-                state->m_WeightsFloToRef,
-                state->m_ParamWeightsRefToFlo,
-                state->m_ParamWeightsFloToRef,
-                state->m_ParamIndicesRefToFlo,
-                state->m_ParamIndicesFloToRef,
-                state->m_SupportSize,
-                lambda);
+        unsigned int loopPointIndex;
+        unsigned int end1;
+        unsigned int end2;
+
+        if(USE_DYNAMIC_LOAD_ALLOCATION)
+        {
+            loopPointIndex = this->m_AtomicPointIndex.fetch_add(BATCH_SIZE); //, std::memory_order_acq_rel
+            endPointIndex = loopPointIndex + BATCH_SIZE;
+            if(endPointIndex > totalCount)
+            {
+                endPointIndex = totalCount;
+            }
+
+            end1 = endPointIndex;
         }
         else
         {
-            // Floating to Reference sample
-            this->m_Associate->m_PointSamplerFloImage->Sample(threadId, pointSample);
+            loopPointIndex = subDomain[0];
+            end1 = subDomain[1]+1;
+            endPointIndex = totalCount;
+        }
+
+    end2 = end1;
+    if(end1>refToFloSampleCount)
+    {
+        end1 = refToFloSampleCount;
+    }
+
+    for(; loopPointIndex < end1; ++loopPointIndex)
+    {
+        // Reference to Floating sample
+        pointSamplerRef->Sample(loopPointIndex, pointSample);
+        //state->m_DistEvalContextFloImage->RestartSampler();
 
             ComputePointValueAndDerivative(
                 pointSample,
-                this->m_Associate->m_DistDataStructRefImage.GetPointer(),
-                state->m_DistEvalContextRefImage.GetPointer(),
+                distStructFloImage,
+                distEvalContextFloImage,
+                transformRefToFlo,
+                transformFloToRef,
+                distanceRefToFloAcc,
+                weightRefToFloAcc,
+                derivativeRefToFlo,
+                derivativeFloToRef,
+                weightsRefToFlo,
+                weightsFloToRef,
+                paramWeightsRefToFlo,
+                paramWeightsFloToRef,
+                paramIndicesRefToFlo,
+                paramIndicesFloToRef,
+                supportSizeRefToFlo,
+                supportSizeFloToRef,
+                lambda,
+                loopPointIndex);
+    }
+    for(; loopPointIndex < end2; ++loopPointIndex)
+    {
+        unsigned int pointIndex = loopPointIndex-refToFloSampleCount;// + floToRefSampleCount*localIteration;
+        // Floating to Reference sample
+        pointSamplerFlo->Sample(pointIndex, pointSample);
+        //state->m_DistEvalContextRefImage->RestartSampler();
+
+        ComputePointValueAndDerivative(
+                pointSample,
+                distStructRefImage,
+                distEvalContextRefImage,
                 transformFloToRef,
                 transformRefToFlo,
-                state->m_DistanceFloToRef,
-                state->m_WeightFloToRef,
-                state->m_DerivativeFloToRef,
-                state->m_DerivativeRefToFlo,
-                state->m_WeightsFloToRef,
-                state->m_WeightsRefToFlo,
-                state->m_ParamWeightsFloToRef,
-                state->m_ParamWeightsRefToFlo,
-                state->m_ParamIndicesFloToRef,
-                state->m_ParamIndicesRefToFlo,
-                state->m_SupportSize,
-                lambda);
+                distanceFloToRefAcc,
+                weightFloToRefAcc,
+                derivativeFloToRef,
+                derivativeRefToFlo,
+                weightsFloToRef,
+                weightsRefToFlo,
+                paramWeightsFloToRef,
+                paramWeightsRefToFlo,
+                paramIndicesFloToRef,
+                paramIndicesRefToFlo,
+                supportSizeFloToRef,
+                supportSizeRefToFlo,
+                lambda,
+                pointIndex);
+      }
 
-        }
     }
+
+    state->m_DistanceRefToFlo = distanceRefToFloAcc;
+    state->m_DistanceFloToRef = distanceFloToRefAcc;
+    state->m_WeightRefToFlo = weightRefToFloAcc;
+    state->m_WeightFloToRef = weightFloToRefAcc;
+
+    unsigned int refSamples = state->m_DistEvalContextRefImage->GetSampleCount();
+    state->m_DistEvalContextRefImage->GetSampler()->EndIteration(refSamples * refToFloSampleCount);
+    unsigned int floSamples = state->m_DistEvalContextFloImage->GetSampleCount();
+    state->m_DistEvalContextFloImage->GetSampler()->EndIteration(floSamples * floToRefSampleCount);
   }
 
   void
   AfterThreadedExecution() override
   {
-
     //const itk::ThreadIdType numberOfThreads = this->GetNumberOfWorkUnitsUsed();
     const itk::ThreadIdType numberOfThreads = this->GetNumberOfThreadsUsed();
 
     this->m_Associate->m_ThreadsUsed = numberOfThreads;
+    this->m_Associate->m_PointSamplerRefImage->EndIteration(this->m_Associate->m_RefToFloSampleCount);
+    this->m_Associate->m_PointSamplerFloImage->EndIteration(this->m_Associate->m_FloToRefSampleCount);
   }
-
+/*
 	inline static void ComputeSymmetryLoss(PointType originalPoint, PointType returnedPoint, SymmetryLossType &out)
 	{
 		itk::Vector<double, ImageDimension> vec = returnedPoint - originalPoint;
 	
 		out.value = 0.5 * vec.GetSquaredNorm();
 		out.grad = vec;
-	}
+	}*/
 
-    inline static double ReciprocalValue(double value)
-	{
-		if (value < 1e-15)
-		{
-			return 0.0;
-		}
-		else
-		{
-			return 1.0 / value;
-		}
-	}
-
-  void ComputePointValueAndDerivative(
+  inline static void ComputePointValueAndDerivative(
       PointSampleType& pointSample,
       DistType* distStruct,
       DistEvalContextType* distEvalContext,
       TransformType* tfor,
       TransformType* trev,
-      double& value,
-      double &weight,
-      DerivativeType& dfor,
-      DerivativeType& drev,
-      DerivativeType& wfor,
-      DerivativeType& wrev,
+      FixedPointNumber& value,
+      FixedPointNumber& weight,
+      FixedPointNumber* dfor,
+      FixedPointNumber* drev,
+      FixedPointNumber* wfor,
+      FixedPointNumber* wrev,
       WeightsType& splineWeightsFor,
       WeightsType& splineWeightsRev,
       ParameterIndexArrayType& parameterIndicesFor,
       ParameterIndexArrayType& parameterIndicesRev,
-      unsigned int supportSize,
-      double lambda
+      unsigned int supportSizeFor,
+      unsigned int supportSizeRev,
+      double lambda,
+      unsigned int pointIndex
       )
   {
     constexpr unsigned int Dim = TAssociate::ImageDimension;
 
 	PointType transformedPoint;
 	PointType returnedPoint;
-	bool isInside;
+	bool isInside1;
+    bool isInside;
 
     unsigned int paramPerDimFor = tfor->GetNumberOfParametersPerDimension();
     unsigned int paramPerDimRev = trev->GetNumberOfParametersPerDimension();
 
-	tfor->TransformPoint(pointSample.m_Point, transformedPoint, splineWeightsFor, parameterIndicesFor, isInside);
-	if (!isInside)
+	tfor->TransformPoint(pointSample.m_Point, transformedPoint, splineWeightsFor, parameterIndicesFor, isInside1);
+	if (!isInside1)
 		return;
 	trev->TransformPoint(transformedPoint, returnedPoint, splineWeightsRev, parameterIndicesRev, isInside);
 
-	SymmetryLossType slt;
-
-	ComputeSymmetryLoss(pointSample.m_Point, returnedPoint, slt);
+    itk::Vector<double, ImageDimension> symLossVec;
+    double symLossValue;
+    
+    // Compute symmetry loss (value and vector)
+    if(!isInside)
+    {
+	    symLossVec = (transformedPoint - pointSample.m_Point);
+    } else
+    {
+	    symLossVec = (returnedPoint - pointSample.m_Point);
+    }
+   symLossValue = 0.5 * symLossVec.GetSquaredNorm();
 
     // Compute the point-to-set distance and gradient here
 
@@ -312,6 +394,7 @@ private:
     itk::Vector<double, Dim> grad;
     bool flag = distStruct->ValueAndDerivative(
         distEvalContext,
+        pointIndex,
         transformedPoint,
         pointSample.m_Value,
         localValue,
@@ -322,33 +405,79 @@ private:
 
     if(!flag) {
         valueW = 0.0;
+        if(!isInside)
+        {
+            return;
+        }
     } else {
         valueW = pointSample.m_Weight;
     }
+        if(valueW != 0.0 && valueW != 1.0)
+        {
+            std::cout << "Strange weight: " << valueW << std::endl;
+        }
 
-    value += (1.0-lambda) * valueW * localValue + lambda * w * slt.value;
-    weight += (1.0-lambda) * valueW + lambda * w;
+    const double invLambda = 1.0 - lambda;
+    const double lambdaWeighted = lambda * w;
+    const double invLambdaWeighted = (1.0-lambda)*w;
+    const double invLambdaValueWeighted = (1.0-lambda)*valueW;
+    const double doubleValue = invLambdaValueWeighted * localValue + lambdaWeighted * symLossValue;
+    const double doubleWeight = invLambdaValueWeighted + lambdaWeighted;
+    value += FixedPointFromDouble(doubleValue);
+    weight += FixedPointFromDouble(doubleWeight);
+    /*
+    if(value < 0.0 || weight < 0.0)
+    {
+        std::cout << "Sampled Point: " << pointSample.m_Point << std::endl;
+        std::cout << "Transformed Point: " << transformedPoint << std::endl;
+        std::cout << "Returned Point: " << returnedPoint << std::endl;
+        std::cout << "IsInside1: " << isInside1 << std::endl;
+        std::cout << "IsInside: " << isInside << std::endl;
+        std::cout << "LocalValue: " << localValue << std::endl;
+        std::cout << "symLossValue: " << symLossValue << std::endl;
+        std::cout << "symVec" << symLossVec << std::endl;
+        std::cout << "w: " << w << std::endl;
+        std::cout << "Double: " << doubleValue << ", " << doubleWeight << std::endl;
+        std::cout << "Fixed: " << value << ", " << weight << std::endl;
+        exit(0);
+    }*/
 
 	// Compute jacobian for metric and symmetry loss
 	for (unsigned int dim = 0; dim < Dim; ++dim)
 	{
 		unsigned int offFor = dim * paramPerDimFor;
-		unsigned int offRev = dim * paramPerDimRev;
-		double gradVal = grad[dim];
-		double sltGradVal = slt.grad[dim];
+		const double gradVal = grad[dim];
+		const double sltGradVal = symLossVec[dim];
 
-		for (unsigned int mu = 0; mu < supportSize; ++mu)
+        const double lambdaWeightedSymmetryLossGradVal = lambdaWeighted * sltGradVal;
+        const double invLambdaValueWGradVal = invLambdaValueWeighted * gradVal;
+        typename WeightsType::ValueType* weightsFor = &splineWeightsFor[0];
+        typename ParameterIndexArrayType::ValueType* indicesFor = &parameterIndicesFor[0];
+
+		for (unsigned int mu = 0; mu < supportSizeFor; ++mu)
 		{
-			unsigned int parInd = offFor + parameterIndicesFor[mu];
-			unsigned int parIndRev = offRev + parameterIndicesRev[mu];
-            double sw = splineWeightsFor[mu];
-			double swInv = splineWeightsRev[mu];
+			unsigned int parInd = offFor + indicesFor[mu];//parameterIndicesFor[mu];
+            double sw = weightsFor[mu];//splineWeightsFor[mu];
 
-			dfor[parInd] -= ((1.0 - lambda) * sw * valueW * gradVal + lambda * sw * w * sltGradVal);
-			wfor[parInd] += ((1.0 - lambda) * sw * w + lambda * sw * w);
-            drev[parIndRev] -= (lambda * swInv * w * sltGradVal);
-            wrev[parIndRev] += (lambda * swInv * w);
+			dfor[parInd] -= FixedPointFromDouble(invLambdaValueWGradVal * sw + lambdaWeightedSymmetryLossGradVal * sw);
+			wfor[parInd] += FixedPointFromDouble(invLambdaWeighted * sw + lambdaWeighted * sw);
 		}
+
+        if(isInside)
+        {
+            typename WeightsType::ValueType* weightsRev = &splineWeightsRev[0];
+            typename ParameterIndexArrayType::ValueType* indicesRev = &parameterIndicesRev[0];
+
+    		unsigned int offRev = dim * paramPerDimRev;
+		    for (unsigned int mu = 0; mu < supportSizeRev; ++mu)
+		    {
+			    unsigned int parIndRev = offRev + indicesRev[mu];//parameterIndicesRev[mu];
+			    double swInv = weightsRev[mu];//splineWeightsRev[mu];
+
+                drev[parIndRev] -= FixedPointFromDouble(lambdaWeightedSymmetryLossGradVal * swInv);
+                wrev[parIndRev] += FixedPointFromDouble(lambdaWeighted * swInv);
+		    }
+        }
 	}
   }
 };
@@ -362,7 +491,6 @@ public:
   using Pointer = itk::SmartPointer<Self>;
   using ConstPointer = itk::SmartPointer<const Self>;
 
-  // The domain is an index range.
   using DomainType = typename Superclass::DomainType;
 
   using ImageType = TImageType;
@@ -386,82 +514,107 @@ protected:
   AlphaBSplineRegistrationStepThreader() = default;
 
 private:
+  std::atomic<unsigned int> m_AtomicPointIndex;
+  char pad[60];
+  unsigned int m_TotalCount;
+
   void
   BeforeThreadedExecution() override
   {
-      std::vector<ThreadStateType>& threadStates = this->m_Associate->m_ThreadData;
-    // Resize our per-thread data structures to the number of threads that we
-    // are actually going to use.  At this point the number of threads that
-    // will be used have already been calculated and are available.  The number
-    // of threads used depends on the number of cores or processors available
-    // on the current system.  It will also be truncated if, for example, the
-    // number of cells in the CellContainer is smaller than the number of cores
-    // available.
     const itk::ThreadIdType numberOfThreads = this->GetNumberOfThreadsUsed();
     //const itk::ThreadIdType numberOfThreads = this->GetNumberOfWorkUnitsUsed();
 
-    assert(numberOfThreads <= threadStates.size());
+    m_AtomicPointIndex = 0U;
+    m_TotalCount = this->m_Associate->m_TransformRefToFlo->GetNumberOfParameters() + this->m_Associate->m_TransformFloToRef->GetNumberOfParameters();
   }
 
   void
   ThreadedExecution(const DomainType & subDomain, const itk::ThreadIdType threadId) override
   {
+    // Here we set the number of transform parameter which will be processed in one batch by this threader.
+    constexpr unsigned int BATCH_SIZE = 8U;
+
     // The number of threads used for the previous step
     unsigned int threadsUsed = this->m_Associate->m_ThreadsUsed;
     unsigned int paramNumRefToFlo = this->m_Associate->m_TransformRefToFlo->GetNumberOfParameters();
-    double momentum = this->m_Associate->m_Momentum;
-    double learningRate = this->m_Associate->m_LearningRate;
+    const double momentum = this->m_Associate->m_Momentum;
+    const double invMomentum = 1.0 - momentum;
     constexpr double eps = 0.01;
 
     DerivativeType& derRefToFlo = this->m_Associate->m_DerivativeRefToFlo;
     DerivativeType& derFloToRef = this->m_Associate->m_DerivativeFloToRef;
+    ThreadStateType* threadState = this->m_Associate->m_ThreadData.get();
+
     if(threadId == 0)
     {
-        double refToFloValue = 0.0;
-        double floToRefValue = 0.0;
-        double refToFloWeight = 0.0;
-        double floToRefWeight = 0.0;
+        FixedPointNumber refToFloValue = 0;
+        FixedPointNumber floToRefValue = 0;
+        FixedPointNumber refToFloWeight = 0;
+        FixedPointNumber floToRefWeight = 0;
         for(unsigned int i = 0; i < threadsUsed; ++i) {
-            refToFloValue += this->m_Associate->m_ThreadData[i].m_DistanceRefToFlo;
-            floToRefValue += this->m_Associate->m_ThreadData[i].m_DistanceFloToRef;
-            refToFloWeight += this->m_Associate->m_ThreadData[i].m_WeightRefToFlo;
-            floToRefWeight += this->m_Associate->m_ThreadData[i].m_WeightFloToRef;
+            refToFloValue += threadState[i].m_DistanceRefToFlo;
+            floToRefValue += threadState[i].m_DistanceFloToRef;
+            refToFloWeight += threadState[i].m_WeightRefToFlo;
+            floToRefWeight += threadState[i].m_WeightFloToRef;
         }
-        this->m_Associate->m_Value = 0.5 * (refToFloValue/(refToFloWeight + 0.001) + floToRefValue/(floToRefWeight + 0.001));
+
+        this->m_Associate->m_Value = 0.5 * (
+          DoubleFromFixedPoint(refToFloValue)/(DoubleFromFixedPoint(refToFloWeight) + eps) +
+          DoubleFromFixedPoint(floToRefValue)/(DoubleFromFixedPoint(floToRefWeight) + eps));
     }
 
-    // Look only at the range of indices in the subDomain.
-    for (itk::IndexValueType ii = subDomain[0]; ii <= subDomain[1]; ++ii)
+    unsigned int localPointIndex = 0U;
+    unsigned int localTotalCount = this->m_TotalCount;
+
+    while(localPointIndex < localTotalCount)
     {
-      
-        if(ii < paramNumRefToFlo)
+        unsigned int startPointIndex = this->m_AtomicPointIndex.fetch_add(BATCH_SIZE, std::memory_order_acq_rel);
+        unsigned int endPointIndex = startPointIndex + BATCH_SIZE;
+        if(endPointIndex > localTotalCount)
         {
-            itk::IndexValueType localIndex = ii;
-
-            double derVal = 0.0;
-            double weightVal = 0.0;
-            for(unsigned int i = 0; i < threadsUsed; ++i) {
-                derVal += this->m_Associate->m_ThreadData[i].m_DerivativeRefToFlo[localIndex];
-                weightVal += this->m_Associate->m_ThreadData[i].m_WeightsRefToFlo[localIndex];
-            }
-            
-            double prevVal = this->m_Associate->m_DerivativeRefToFlo[localIndex];
-            this->m_Associate->m_DerivativeRefToFlo[localIndex] = prevVal * momentum + (1.0 - momentum) * derVal / (weightVal + eps);
+            endPointIndex = localTotalCount;
         }
-        else
-        {
-            itk::IndexValueType localIndex = ii - paramNumRefToFlo;
+        localPointIndex = endPointIndex;
 
-            double derVal = 0.0;
-            double weightVal = 0.0;
-            for(unsigned int i = 0; i < threadsUsed; ++i) {
-                derVal += this->m_Associate->m_ThreadData[i].m_DerivativeFloToRef[localIndex];
-                weightVal += this->m_Associate->m_ThreadData[i].m_WeightsFloToRef[localIndex];
-            }
-            
-            double prevVal = this->m_Associate->m_DerivativeFloToRef[localIndex];
-            this->m_Associate->m_DerivativeFloToRef[localIndex] = prevVal * momentum + (1.0 - momentum) * derVal / (weightVal + eps);
+    itk::IndexValueType ii = startPointIndex;
+    itk::IndexValueType end1 = endPointIndex;
+
+    if(end1 > paramNumRefToFlo)
+        end1 = paramNumRefToFlo;
+
+    itk::IndexValueType end2 = endPointIndex;
+
+    for (; ii < end1; ++ii)
+    {
+        itk::IndexValueType localIndex = ii;
+
+        FixedPointNumber derVal = 0;
+        FixedPointNumber weightVal = 0;
+        for(unsigned int i = 0; i < threadsUsed; ++i) {
+            derVal += threadState[i].m_DerivativeRefToFlo[localIndex];
+            weightVal += threadState[i].m_WeightsRefToFlo[localIndex];
         }
+
+        const double prevVal = derRefToFlo[localIndex];
+        const double normalized = DoubleFromFixedPoint(derVal) / (DoubleFromFixedPoint(weightVal)+eps);
+        derRefToFlo[localIndex] = prevVal * momentum + invMomentum * normalized;
+    }
+    for (; ii < end2; ++ii)
+    {
+        itk::IndexValueType localIndex = ii - paramNumRefToFlo;
+
+        FixedPointNumber derVal = 0;
+        FixedPointNumber weightVal = 0;
+        for(unsigned int i = 0; i < threadsUsed; ++i) {
+            derVal += threadState[i].m_DerivativeFloToRef[localIndex];
+            weightVal += threadState[i].m_WeightsFloToRef[localIndex];
+        }
+
+        const double prevVal = derFloToRef[localIndex];
+        const double normalized = DoubleFromFixedPoint(derVal) / (DoubleFromFixedPoint(weightVal)+eps);
+        derFloToRef[localIndex] = prevVal * momentum + invMomentum * normalized;
+    }
+
     }
   }
 
@@ -472,7 +625,6 @@ private:
     //const itk::ThreadIdType numberOfThreads = this->GetNumberOfWorkUnitsUsed();
 
     this->m_Associate->m_ThreadsUsed = numberOfThreads;
-
   }
 };
 
@@ -596,6 +748,11 @@ public:
         m_FloToRefSampleCount = count;
     }
 
+    virtual double GetValue() const
+    {
+        return m_Value;
+    }
+
     virtual void Initialize()
     {
         assert(m_TransformRefToFlo.GetPointer() != nullptr);
@@ -603,22 +760,28 @@ public:
 
         m_DerivativeRefToFlo.SetSize(m_TransformRefToFlo->GetNumberOfParameters());
         m_DerivativeFloToRef.SetSize(m_TransformFloToRef->GetNumberOfParameters());
+        m_DerivativeRefToFlo.Fill(0.0);
+        m_DerivativeFloToRef.Fill(0.0);
 
 //    void Initialize(unsigned int paramNumRefToFlo, unsigned int paramNumFloToRef, unsigned int supportSize, DistEvalContextPointer distEvalContextRefImage, DistEvalContextPointer distEvalContextFloImage)
 
-        m_ThreadData.reserve(128U);
-        unsigned int supSize = (unsigned int)pow(4.0, ImageDimension);
+        m_ThreadData.reset(new ThreadStateType[128U]);
+        //m_ThreadData.reserve(128U);
+        //unsigned int supSize = (unsigned int)pow(4.0, ImageDimension);
+        unsigned int supSizeRefToFlo = m_TransformRefToFlo->GetNumberOfAffectedWeights();
+        unsigned int supSizeFloToRef = m_TransformFloToRef->GetNumberOfAffectedWeights();
         for(unsigned int i = 0; i < 32U; ++i)
         {
             //Initialize(unsigned int paramNumRefToFlo, unsigned int paramNumFloToRef, unsigned int supportSize, DistEvalContextPointer distEvalContextRefImage, DistEvalContextPointer distEvalContextFloImage)
-            ThreadStateType ts;
-            m_ThreadData.push_back(ts);
+            //ThreadStateType ts;
+            //m_ThreadData.push_back(ts);
             DistEvalContextPointer evalContext1 = m_DistDataStructRefImage->MakeEvalContext();
             DistEvalContextPointer evalContext2 = m_DistDataStructFloImage->MakeEvalContext();
             m_ThreadData[i].Initialize(
                 m_TransformRefToFlo->GetNumberOfParameters(),
                 m_TransformFloToRef->GetNumberOfParameters(),
-                supSize,
+                supSizeRefToFlo,
+                supSizeFloToRef,
                 evalContext1,
                 evalContext2
             );
@@ -630,31 +793,28 @@ public:
         unsigned int iterations = m_Iterations;
         for(unsigned int i = 0; i < iterations; ++i)
         {
-            // Compute the distance value and derivatives for a sampled subset of the image
-            //std::cout << "Stage 1" << std::endl;
+            //std::cout << "Iteration: " << i << std::endl;
 
-            //chronometer.Start("Stage 1");            
+            // Compute the distance value and derivatives for a sampled subset of the image
             typename VADThreaderType::DomainType completeDomain1;
             completeDomain1[0] = 0;
             completeDomain1[1] = this->m_RefToFloSampleCount + this->m_FloToRefSampleCount - 1;
             this->m_VADThreader->Execute(this, completeDomain1);
-            //chronometer.Stop("Stage 1");
 
-            //std::cout << "Stage 2" << std::endl;
             // Aggregate, normalize, and apply a step counter to the gradient direction
-
-            //chronometer.Start("Stage 2");            
+            
             typename StepThreaderType::DomainType completeDomain2;
             completeDomain2[0] = 0;
             completeDomain2[1] = m_TransformRefToFlo->GetNumberOfParameters() + m_TransformFloToRef->GetNumberOfParameters() - 1;
-            this->m_StepThreader->Execute(this, completeDomain2);
-            //chronometer.Stop("Stage 2");
+            this->m_StepThreader->Execute(this, completeDomain2);           
 
             m_TransformRefToFlo->UpdateTransformParameters(m_DerivativeRefToFlo, m_LearningRate);
             m_TransformFloToRef->UpdateTransformParameters(m_DerivativeFloToRef, m_LearningRate);
 
-            //if(i % 50 == 0)
-                //std::cout << "Value: " << m_Value << std::endl;
+            if(m_PrintInterval > 0U && i % m_PrintInterval == 0)
+            {
+                std::cout << "[" << i << "] Value: " << m_Value << std::endl;
+            }
         }
         //chronometer.Report(std::cout);
     }   
@@ -665,13 +825,12 @@ protected:
         m_Momentum = 0.1;
         m_LearningRate = 1.0;
         m_SymmetryLambda = 0.05;
-        m_DoMultiThreadValueAndDerivative = true;
-        m_DoMultiThreadStep = true;
 
         m_RefToFloSampleCount = 4096;
         m_FloToRefSampleCount = 4096;
 
         m_Iterations = 300;
+        m_PrintInterval = 0;
 
         m_VADThreader = VADThreaderType::New();
         m_StepThreader = StepThreaderType::New();
@@ -691,37 +850,39 @@ protected:
     DistPointer m_DistDataStructRefImage;
     DistPointer m_DistDataStructFloImage;
 
+    // Objective function and optimization parameters
     double m_Momentum;
     double m_LearningRate;
     double m_SymmetryLambda;
+
+    // Sampling parameters
+    unsigned int m_RefToFloSampleCount;
+    unsigned int m_FloToRefSampleCount;
+
+    // Output and reporting settings
+    unsigned int m_PrintInterval;
+
     // Current state
     double m_Value;
 
     // Thread-local data for value and derivatives computation
-    std::vector<ThreadStateType > m_ThreadData;
+    std::unique_ptr<ThreadStateType[]> m_ThreadData;
+
+    // Threads used is assigned by the VAD threader and used by the Step threader
     unsigned int m_ThreadsUsed;
+
+    // Threaders
     VADThreaderPointer m_VADThreader;
     StepThreaderPointer m_StepThreader;
 
     unsigned int m_Iterations;
 
-    unsigned int m_RefToFloSampleCount;
-    unsigned int m_FloToRefSampleCount;
-
     // Current/last derivative
     DerivativeType m_DerivativeRefToFlo;
     DerivativeType m_DerivativeFloToRef;
 
-    // Enable/disable threading
-    bool m_DoMultiThreadValueAndDerivative;
-    bool m_DoMultiThreadStep;
-
     friend class AlphaBSplineRegistrationVADThreader<Self, ImageType, TransformType, DistType>;
     friend class AlphaBSplineRegistrationStepThreader<Self, ImageType, TransformType, DistType>;
-
-   
-    //itk::TimeProbesCollectorBase chronometer;
-
 };
 
 #endif

@@ -1,11 +1,7 @@
 
-//#include "../registration/alphaBSplineRegistration.h"
-//#include "../registration/alphaBSplineRegistration3.h"
-#include "../registration/alphaBSplineRegistration4.h"
-//#include "../registration/alphaBSplineRegistration5.h"
+#include "../registration/alphaBSplineRegistration.h"
 #include "../samplers/pointSampler.h"
 #include "../metric/mcAlphaCutPointToSetDistance.h"
-#include "../samplers/quasiRandomGenerator.h"
 
 #include "../common/itkImageProcessingTools.h"
 #include "itkTimeProbesCollectorBase.h"
