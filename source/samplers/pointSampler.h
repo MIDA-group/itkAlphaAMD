@@ -481,7 +481,7 @@ public:
 
     virtual IndexType ComputeIndex(unsigned int sampleID, IndexType& origin, SizeType& size) override
     {
-        assert(m_Samples.size() > 0U);
+        assert(m_Samplers.size() > 0U);
         
         double p = XORShiftRNGDouble1D(Superclass::GetSeed() + sampleID);
         size_t ind = m_Samplers.size()-1;

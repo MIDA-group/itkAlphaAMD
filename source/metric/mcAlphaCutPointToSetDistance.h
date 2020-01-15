@@ -105,7 +105,7 @@ inline double PerformEaseOut(double value, double easeOutThreshold)
 }
 
 template <unsigned int ImageDimension>
-inline double InterpolateDistancesWithGrad(itk::Vector<double, ImageDimension> frac, ValuedCornerPoints<ImageDimension>& distanceValues, itk::Vector<double, ImageDimension>& grad, double easeOutThreshold=0.5);
+inline double InterpolateDistancesWithGrad(itk::Vector<double, ImageDimension> frac, ValuedCornerPoints<ImageDimension>& distanceValues, itk::Vector<double, ImageDimension>& grad, double easeOutThreshold=0.1);
 
 // Linear interpolation
 template <>

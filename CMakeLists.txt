@@ -11,39 +11,39 @@ find_package(ITK REQUIRED)
 include(${ITK_USE_FILE})
 
 SET(HEADERS
-  transforms/itkAlphaSMDAffineTransform.h
-  metric/itkAlphaSMDMetric2.h
-  metric/itkAlphaSMDMetricInternal2.h
-  registration/registrationRoutines.h
+  source/transforms/itkAlphaSMDAffineTransform.h
+  source/metric/itkAlphaSMDMetric2.h
+  source/metric/itkAlphaSMDMetricInternal2.h
+  source/registration/registrationRoutines.h
 )
 
-add_executable(ACRandomTransforms acRandomTransforms.cpp ${HEADERS})
+add_executable(ACRandomTransforms source/acRandomTransforms.cpp ${HEADERS})
 
-add_executable(ACRegister acRegister.cpp ${HEADERS})
+add_executable(ACRegister source/acRegister.cpp ${HEADERS})
 
-add_executable(ACTransform acTransform.cpp)
+add_executable(ACTransform source/acTransform.cpp)
 
-add_executable(ACTransformLandmarks acTransformLandmarks.cpp)
+add_executable(ACTransformLandmarks source/acTransformLandmarks.cpp)
 
-add_executable(ACLabelOverlap acLabelOverlap.cpp)
+add_executable(ACLabelOverlap source/acLabelOverlap.cpp)
 
-add_executable(FormatConv formatConv.cpp)
+add_executable(FormatConv source/formatConv.cpp)
 
-add_executable(ACTimeAnalysis acTimeAnalysis.cpp)
+add_executable(ACTimeAnalysis source/acTimeAnalysis.cpp)
 
-add_executable(ACTestBSpline acTestBSpline.cpp)
+add_executable(ACTestBSpline source/acTestBSpline.cpp)
 
-add_executable(RegisterBSpline3D registerBSpline3D_2.cpp)
+add_executable(RegisterBSpline3D source/registerBSpline3D_2.cpp)
 
-add_executable(SynthEvalDeformableND synthEvalDeformableND.cpp)
+add_executable(SynthEvalDeformableND source/synthEvalDeformableND.cpp)
 
-add_executable(PWEvalDeformableND pwEvalDeformableND.cpp)
+add_executable(PWEvalDeformableND source/pwEvalDeformableND.cpp)
 
-add_executable(ABSReg absReg.cpp)
+add_executable(ABSReg source/absReg.cpp)
 
-add_executable(TestMCDS testMCDS.cpp)
+add_executable(TestMCDS source/testMCDS.cpp)
 
-add_executable(TestSuite tests/testSuite.cpp)
+add_executable(TestSuite source/tests/testSuite.cpp)
 
 target_link_libraries(ACRandomTransforms ${ITK_LIBRARIES})
 

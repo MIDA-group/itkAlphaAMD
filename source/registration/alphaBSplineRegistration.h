@@ -13,6 +13,7 @@
 #include <atomic>
 
 #include "../common/quantization.h"
+#include "../common/command.h"
 
 // Point sampler methods
 #include "../samplers/pointSamplerBase.h"
@@ -160,9 +161,11 @@ private:
     // on the current system.  It will also be truncated if, for example, the
     // number of cells in the CellContainer is smaller than the number of cores
     // available.
-    const itk::ThreadIdType numberOfThreads = this->GetNumberOfThreadsUsed();
+    //const itk::ThreadIdType numberOfThreads = this->GetNumberOfThreadsUsed();
     // Check here that we have enough thread states
-    //const itk::ThreadIdType numberOfThreads = this->GetNumberOfWorkUnitsUsed();
+    const itk::ThreadIdType numberOfThreads = this->GetNumberOfWorkUnitsUsed();
+
+    this->m_Associate->InitializeThreadState(numberOfThreads);
 
     m_AtomicPointIndex = 0U;
   }
@@ -322,8 +325,9 @@ private:
   void
   AfterThreadedExecution() override
   {
-    //const itk::ThreadIdType numberOfThreads = this->GetNumberOfWorkUnitsUsed();
-    const itk::ThreadIdType numberOfThreads = this->GetNumberOfThreadsUsed();
+    const itk::ThreadIdType numberOfThreads = this->GetNumberOfWorkUnitsUsed();
+    //std::cout << "Number of threads: " << numberOfThreads << std::endl;
+    //const itk::ThreadIdType numberOfThreads = this->GetNumberOfThreadsUsed();
 
     this->m_Associate->m_ThreadsUsed = numberOfThreads;
     this->m_Associate->m_PointSamplerRefImage->EndIteration(this->m_Associate->m_RefToFloSampleCount);
@@ -412,10 +416,6 @@ private:
     } else {
         valueW = pointSample.m_Weight;
     }
-        if(valueW != 0.0 && valueW != 1.0)
-        {
-            std::cout << "Strange weight: " << valueW << std::endl;
-        }
 
     const double invLambda = 1.0 - lambda;
     const double lambdaWeighted = lambda * w;
@@ -521,8 +521,8 @@ private:
   void
   BeforeThreadedExecution() override
   {
-    const itk::ThreadIdType numberOfThreads = this->GetNumberOfThreadsUsed();
-    //const itk::ThreadIdType numberOfThreads = this->GetNumberOfWorkUnitsUsed();
+    //const itk::ThreadIdType numberOfThreads = this->GetNumberOfThreadsUsed();
+    const itk::ThreadIdType numberOfThreads = this->GetNumberOfWorkUnitsUsed();
 
     m_AtomicPointIndex = 0U;
     m_TotalCount = this->m_Associate->m_TransformRefToFlo->GetNumberOfParameters() + this->m_Associate->m_TransformFloToRef->GetNumberOfParameters();
@@ -621,8 +621,8 @@ private:
   void
   AfterThreadedExecution() override
   {
-    const itk::ThreadIdType numberOfThreads = this->GetNumberOfThreadsUsed();
-    //const itk::ThreadIdType numberOfThreads = this->GetNumberOfWorkUnitsUsed();
+    //const itk::ThreadIdType numberOfThreads = this->GetNumberOfThreadsUsed();
+    const itk::ThreadIdType numberOfThreads = this->GetNumberOfWorkUnitsUsed();
 
     this->m_Associate->m_ThreadsUsed = numberOfThreads;
   }
@@ -748,6 +748,11 @@ public:
         m_FloToRefSampleCount = count;
     }
 
+    virtual void AddCallback(Command* cmd)
+    {
+        m_Callbacks.push_back(cmd);
+    }
+
     virtual double GetValue() const
     {
         return m_Value;
@@ -765,16 +770,24 @@ public:
 
 //    void Initialize(unsigned int paramNumRefToFlo, unsigned int paramNumFloToRef, unsigned int supportSize, DistEvalContextPointer distEvalContextRefImage, DistEvalContextPointer distEvalContextFloImage)
 
-        m_ThreadData.reset(new ThreadStateType[128U]);
-        //m_ThreadData.reserve(128U);
-        //unsigned int supSize = (unsigned int)pow(4.0, ImageDimension);
-        unsigned int supSizeRefToFlo = m_TransformRefToFlo->GetNumberOfAffectedWeights();
-        unsigned int supSizeFloToRef = m_TransformFloToRef->GetNumberOfAffectedWeights();
-        for(unsigned int i = 0; i < 32U; ++i)
+        m_ThreadsAllocated = 0U;
+
+        unsigned int globalMaximumThreads = itk::MultiThreaderBase::GetGlobalMaximumNumberOfThreads();
+
+        m_ThreadData.reset(new ThreadStateType[globalMaximumThreads]); //new ThreadStateType[128U]);
+
+        InitializeThreadState(1);
+    }
+
+    virtual void InitializeThreadState(unsigned int threads)
+    {
+        assert(itk::MultiThreaderBase::GetGlobalMaximumNumberOfThreads() >= threads);
+
+        for(unsigned int i = m_ThreadsAllocated; i < threads; ++i)
         {
-            //Initialize(unsigned int paramNumRefToFlo, unsigned int paramNumFloToRef, unsigned int supportSize, DistEvalContextPointer distEvalContextRefImage, DistEvalContextPointer distEvalContextFloImage)
-            //ThreadStateType ts;
-            //m_ThreadData.push_back(ts);
+            unsigned int supSizeRefToFlo = m_TransformRefToFlo->GetNumberOfAffectedWeights();
+            unsigned int supSizeFloToRef = m_TransformFloToRef->GetNumberOfAffectedWeights();
+
             DistEvalContextPointer evalContext1 = m_DistDataStructRefImage->MakeEvalContext();
             DistEvalContextPointer evalContext2 = m_DistDataStructFloImage->MakeEvalContext();
             m_ThreadData[i].Initialize(
@@ -785,6 +798,10 @@ public:
                 evalContext1,
                 evalContext2
             );
+        }
+        if (threads > m_ThreadsAllocated)
+        {
+            m_ThreadsAllocated = threads;
         }
     }
 
@@ -799,6 +816,8 @@ public:
             typename VADThreaderType::DomainType completeDomain1;
             completeDomain1[0] = 0;
             completeDomain1[1] = this->m_RefToFloSampleCount + this->m_FloToRefSampleCount - 1;
+            this->m_VADThreader->SetMaximumNumberOfThreads(itk::MultiThreaderBase::GetGlobalMaximumNumberOfThreads());
+            this->m_VADThreader->SetNumberOfWorkUnits(itk::MultiThreaderBase::GetGlobalMaximumNumberOfThreads());
             this->m_VADThreader->Execute(this, completeDomain1);
 
             // Aggregate, normalize, and apply a step counter to the gradient direction
@@ -806,10 +825,17 @@ public:
             typename StepThreaderType::DomainType completeDomain2;
             completeDomain2[0] = 0;
             completeDomain2[1] = m_TransformRefToFlo->GetNumberOfParameters() + m_TransformFloToRef->GetNumberOfParameters() - 1;
+            this->m_StepThreader->SetMaximumNumberOfThreads(itk::MultiThreaderBase::GetGlobalMaximumNumberOfThreads());
+            this->m_StepThreader->SetNumberOfWorkUnits(itk::MultiThreaderBase::GetGlobalMaximumNumberOfThreads());
             this->m_StepThreader->Execute(this, completeDomain2);           
 
             m_TransformRefToFlo->UpdateTransformParameters(m_DerivativeRefToFlo, m_LearningRate);
             m_TransformFloToRef->UpdateTransformParameters(m_DerivativeFloToRef, m_LearningRate);
+
+            for(size_t k = 0; k < m_Callbacks.size(); ++k)
+            {
+                m_Callbacks[k]->Invoke();
+            }
 
             if(m_PrintInterval > 0U && i % m_PrintInterval == 0)
             {
@@ -825,6 +851,7 @@ protected:
         m_Momentum = 0.1;
         m_LearningRate = 1.0;
         m_SymmetryLambda = 0.05;
+        m_ThreadsAllocated = 0;
 
         m_RefToFloSampleCount = 4096;
         m_FloToRefSampleCount = 4096;
@@ -870,12 +897,16 @@ protected:
 
     // Threads used is assigned by the VAD threader and used by the Step threader
     unsigned int m_ThreadsUsed;
+    // The number of thread states which have been initialized
+    unsigned int m_ThreadsAllocated;
 
     // Threaders
     VADThreaderPointer m_VADThreader;
     StepThreaderPointer m_StepThreader;
 
     unsigned int m_Iterations;
+
+    std::vector<Command*> m_Callbacks;
 
     // Current/last derivative
     DerivativeType m_DerivativeRefToFlo;

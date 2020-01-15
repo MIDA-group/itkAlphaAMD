@@ -1,6 +1,6 @@
 
-#ifndef POINT_SAMPLER_BASE
-#define POINT_SAMPLER_BASE
+#ifndef POINT_SAMPLER_BASE_H
+#define POINT_SAMPLER_BASE_H
 
 #include "itkImage.h"
 #include "itkImageRegionConstIterator.h"

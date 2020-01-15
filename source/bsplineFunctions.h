@@ -45,6 +45,10 @@
 #include "itkMattesMutualInformationImageToImageMetricv4.h"
 #include "itkRegistrationParameterScalesFromPhysicalShift.h"
 
+#include "registration/alphaBSplineRegistration.h"
+#include "samplers/pointSampler.h"
+#include "metric/mcAlphaCutPointToSetDistance.h"
+
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -54,6 +58,29 @@
 #include "itkExtractImageFilter.h"
 
 #include "nlohmann/json.hpp"
+
+template <typename TTransformType, unsigned int Dim>
+struct BSplineRegistrationCallback : public Command
+{
+    public:
+
+    using TransformType = TTransformType;
+    using TransformPointer = typename TransformType::Pointer;
+
+    TransformPointer m_TransformForward;
+    TransformPointer m_TransformReverse;
+
+    virtual void SetTransforms(TransformPointer transformForward, TransformPointer transformReverse)
+    {
+        m_TransformForward = transformForward;
+        m_TransformReverse = transformReverse;
+    }
+
+    virtual void Invoke()
+    {
+        ;
+    }
+};
 
 struct BSplineRegParamInner {
     double learningRate;
@@ -78,6 +105,7 @@ struct BSplineRegParam
     double momentum;
     double lambdaFactor;
     unsigned long long seed;
+    bool enableCallbacks;
     std::string samplingMode;
     std::vector<BSplineRegParamInner> innerParams;
 };
@@ -144,6 +172,8 @@ BSplineRegParamOuter readConfig(std::string path) {
         readJSONKey(m_i, "samplingMode", &paramSet.samplingMode);
         paramSet.seed = 1337;
         readJSONKey(m_i, "seed", &paramSet.seed);
+        paramSet.enableCallbacks = false;
+        readJSONKey(m_i, "enableCallbacks", &paramSet.enableCallbacks);
 
         //auto innerConfig = config[i]["inner"];
         //std::cout << "Access innerConfig" << i << " of size " << jc["paramSets"][i]["innerParams"].size() << std::endl;
@@ -183,7 +213,7 @@ BSplineRegParamOuter readConfig(std::string path) {
 template <unsigned int ImageDimension = 3U>
 class BSplines {
 public:
-
+    constexpr static unsigned int Dim = ImageDimension;
 typedef double PixelType;
 typedef double CoordinateRepType;
 
@@ -196,6 +226,15 @@ typedef typename DisplacementFieldImageType::Pointer DisplacementFieldImagePoint
 
 typedef typename itk::IPT<double, ImageDimension> IPT;
 
+constexpr static unsigned int splineOrder = 3;
+
+typedef typename itk::BSplineTransform<double, ImageDimension, splineOrder> TransformType;
+typedef typename TransformType::Pointer TransformPointer;
+
+typedef itk::AlphaSMDObjectToObjectMetricDeformv4<ImageType, ImageDimension, double, splineOrder> MetricType;
+typedef typename MetricType::Pointer MetricPointer;
+
+using CallbackType = BSplineRegistrationCallback<TransformType, ImageDimension>;
 
 template <typename TransformType>
 DisplacementFieldImagePointer TransformToDisplacementField(typename TransformType::Pointer transform, ImagePointer reference_image) {
@@ -271,13 +310,6 @@ void SaveJacobianDeterminantImage(ImagePointer image, std::string path) {
 static void CreateEllipseImage(typename ImageType::Pointer image);
 static void CreateCircleImage(typename ImageType::Pointer image);
 
-constexpr static unsigned int splineOrder = 3;
-
-typedef typename itk::BSplineTransform<double, ImageDimension, splineOrder> TransformType;
-typedef typename TransformType::Pointer TransformPointer;
-
-typedef itk::AlphaSMDObjectToObjectMetricDeformv4<ImageType, ImageDimension, double, splineOrder> MetricType;
-typedef typename MetricType::Pointer MetricPointer;
 
 
 ImagePointer GradientMagnitudeImage(ImagePointer image, double sigma) {
@@ -504,41 +536,6 @@ typename ImageType::Pointer ApplyTransform(ImagePointer refImage, ImagePointer f
     return resample->GetOutput();
 }
 
-double normalizeDerivative(unsigned int gridPoints, unsigned int dim)
-{
-    // / 5.0
-    double frac = pow(gridPoints, (double)dim);
-    return frac;
-}
-
-double maxDerivative(itk::Array<double> &array)
-{
-    double sum = 0.0;
-    unsigned int count = array.GetSize();
-    for (unsigned int i = 0; i < count; ++i)
-    {
-        double value = fabs(array[i]);
-        if (value > sum)
-            sum = value;
-    }
-    return sum;
-}
-
-double norm(itk::Array<double> &array, double p, double eps = 1e-7)
-{
-    double sum = 0.0;
-    unsigned int count = array.GetSize();
-    for (unsigned int i = 0; i < count; ++i)
-    {
-        double value = pow(fabs(array[i]), p);
-        sum += value;
-    }
-    sum = pow(sum, 1.0 / p);
-    if (sum < eps)
-        sum = eps;
-    return sum;
-}
-
 void adam_optimizer(MetricType* metric, double learningRate, unsigned int iterations) {
     
     typedef typename MetricType::DerivativeType DerivativeType;
@@ -741,148 +738,221 @@ void register_func(typename ImageType::Pointer fixedImage, typename ImageType::P
     //memorymeter.Report(std::cout);
 }
 
-/*
+typename PointSamplerBase<ImageType, itk::Image<bool, Dim>, ImageType>::Pointer CreateHybridPointSampler(ImagePointer im, ImagePointer maskImage, double w1 = 0.5, bool binaryMode = false, double sigma = 0.0, unsigned int seed = 1000U)
+{
+    using PointSamplerType = PointSamplerBase<ImageType, itk::Image<bool, Dim>, ImageType>;
+    using PointSamplerPointer = typename PointSamplerType::Pointer;
+    PointSamplerPointer sampler1 = QuasiRandomPointSampler<ImageType, itk::Image<bool, Dim>, ImageType>::New().GetPointer();
+    typename GradientWeightedPointSampler<ImageType, itk::Image<bool, Dim>, ImageType>::Pointer sampler2 =
+        GradientWeightedPointSampler<ImageType, itk::Image<bool, Dim>, ImageType>::New().GetPointer();
+    sampler2->SetSigma(sigma);
+    sampler2->SetBinaryMode(binaryMode);
+    sampler2->SetTolerance(1e-9);
+    if(maskImage)
+    {
+        using MaskPointer = typename itk::Image<bool, Dim>::Pointer;
+        MaskPointer maskBin = IPT::ThresholdImage(maskImage, 0.01);
+        
+        sampler1->SetMaskImage(maskBin);
+        sampler2->SetMaskImage(maskBin);
+    }
 
-	typedef itk::ImageRegistrationMethodv4<typename IPT::ImageType, typename IPT::ImageType, TransformType> RegistrationType;
+    typename HybridPointSampler<ImageType, itk::Image<bool, Dim>, ImageType>::Pointer sampler3 =
+        HybridPointSampler<ImageType, itk::Image<bool, Dim>, ImageType>::New();
 
-	typedef itk::RegularStepGradientDescentOptimizerv4<double>              OptimizerType;
-	typedef itk::InterpolateImageFunction<typename IPT::ImageType, double> InterpolatorType;
+    sampler3->AddSampler(sampler1, w1);
+    sampler3->AddSampler(sampler2.GetPointer(), 1.0-w1);
+    sampler3->SetImage(im);
+    sampler3->SetSeed(seed);
+    sampler3->Initialize();
 
-	typename OptimizerType::Pointer      optimizer = OptimizerType::New();
-	typename RegistrationType::Pointer   registration = RegistrationType::New();
+    return sampler3.GetPointer();
+}
 
-	typename InterpolatorType::Pointer fixedInterpolator = IPT::MakeInterpolator(IPT::kImwarpInterpNearest);
-	typename InterpolatorType::Pointer movingInterpolator = IPT::MakeInterpolator(IPT::kImwarpInterpCubic);
+typename PointSamplerBase<ImageType, itk::Image<bool, Dim>, ImageType>::Pointer CreateUniformPointSampler(ImagePointer im, ImagePointer maskImage, unsigned int seed = 1000U)
+{
+    using PointSamplerType = PointSamplerBase<ImageType, itk::Image<bool, Dim>, ImageType>;
+    using PointSamplerPointer = typename PointSamplerType::Pointer;
 
-	metric->SetFixedInterpolator(fixedInterpolator);
-	metric->SetMovingInterpolator(movingInterpolator);
+    PointSamplerPointer sampler1 = UniformPointSampler<ImageType, itk::Image<bool, Dim>, ImageType>::New().GetPointer();
+    if(maskImage)
+    {
+        using MaskPointer = typename itk::Image<bool, Dim>::Pointer;
+        MaskPointer maskBin = IPT::ThresholdImage(maskImage, 0.01);
+        
+        sampler1->SetMaskImage(maskBin);
+    }
 
-	itk::Point<double, Dim> fixedCenter = IPT::ComputeImageCenter(fixedImage, true);
+    sampler1->SetImage(im);
+    sampler1->Initialize();
+    sampler1->SetSeed(seed);
 
-	typename itk::CompositeTransform<double, Dim>::Pointer compositeMovingTransform = itk::CompositeTransform<double, Dim>::New();
+    return sampler1.GetPointer();
+}
 
-	typename itk::IdentityTransform<double, Dim>::Pointer fixedTransform = itk::IdentityTransform<double, Dim>::New();
+typename PointSamplerBase<ImageType, itk::Image<bool, Dim>, ImageType>::Pointer CreateQuasiRandomPointSampler(ImagePointer im, ImagePointer maskImage, unsigned int seed = 1000U)
+{
+    using PointSamplerType = PointSamplerBase<ImageType, itk::Image<bool, Dim>, ImageType>;
+    using PointSamplerPointer = typename PointSamplerType::Pointer;
 
-	TransformPointer movingTransform = TransformType::New();
+    PointSamplerPointer sampler1 = QuasiRandomPointSampler<ImageType, itk::Image<bool, Dim>, ImageType>::New().GetPointer();
+    if(maskImage)
+    {
+        using MaskPointer = typename itk::Image<bool, Dim>::Pointer;
+        MaskPointer maskBin = IPT::ThresholdImage(maskImage, 0.01);
+        
+        sampler1->SetMaskImage(maskBin);
+    }
 
-	fixedTransform->SetIdentity();
-	movingTransform->SetIdentity();
+    sampler1->SetImage(im);
+    sampler1->Initialize();
+    sampler1->SetSeed(seed);
 
-	movingTransform->SetCenter(fixedCenter);
+    return sampler1.GetPointer();
+}
 
-	typename itk::TranslationTransform<double, Dim>::Pointer lastTranslation = itk::TranslationTransform<double, Dim>::New();
+size_t ImagePixelCount(typename ImageType::Pointer image)
+{
+    auto region = image->GetLargestPossibleRegion();
+    auto sz = region.GetSize();
+    size_t cnt = 1;
+    for(unsigned int i = 0; i < Dim; ++i)
+    {
+        cnt *= sz[i];
+    }
 
-	lastTranslation->SetIdentity();
+    return cnt;
+}
 
-	compositeMovingTransform->AddTransform(lastTranslation);
-	compositeMovingTransform->AddTransform(movingTransform);
+#include <chrono>
 
-	compositeMovingTransform->SetNthTransformToOptimize(0, false);
-	compositeMovingTransform->SetNthTransformToOptimize(1, true);
+void mcalpha_register_func(typename ImageType::Pointer fixedImage, typename ImageType::Pointer movingImage, TransformPointer& transformForward, TransformPointer& transformInverse, BSplineRegParam param, ImagePointer fixedMask, ImagePointer movingMask, bool verbose=false, CallbackType* callback=nullptr)
+{
+    typedef itk::IPT<double, ImageDimension> IPT;
 
-	typedef unsigned char uchar;
+    using DistType = MCAlphaCutPointToSetDistance<ImageType, unsigned short>;
+    using DistPointer = typename DistType::Pointer;
 
-	typename itk::ImageMaskSpatialObject<Dim>::Pointer fixedMaskSO = itk::ImageMaskSpatialObject<Dim>::New();
-	fixedMaskSO->SetImage(itk::ConvertImageToIntegerFormat<uchar, Dim>(fixedImageMask));
+    DistPointer distStructRefImage = DistType::New();
+    DistPointer distStructFloImage = DistType::New();
 
-	metric->SetFixedImageMask(fixedMaskSO);
+    distStructRefImage->SetSampleCount(param.alphaLevels);
+    distStructRefImage->SetImage(fixedImage);
+    distStructRefImage->SetMaxDistance(0);
+    distStructRefImage->SetApproximationThreshold(20.0);
+    distStructRefImage->SetApproximationFraction(0.2);
 
-	typename itk::ImageMaskSpatialObject<Dim>::Pointer movingMaskSO = itk::ImageMaskSpatialObject<Dim>::New();
-	movingMaskSO->SetImage(itk::ConvertImageToIntegerFormat<uchar, Dim>(movingImageMask));
+    distStructFloImage->SetSampleCount(param.alphaLevels);
+    distStructFloImage->SetImage(movingImage);
+    distStructFloImage->SetMaxDistance(0);
+    distStructFloImage->SetApproximationThreshold(20.0);
+    distStructFloImage->SetApproximationFraction(0.2);
 
-	metric->SetMovingImageMask(movingMaskSO);
+    distStructRefImage->Initialize();
+    distStructFloImage->Initialize();
 
-	optimizer->SetLearningRate(param.learningRate);
-	optimizer->DoEstimateLearningRateAtEachIterationOn();
-	optimizer->SetRelaxationFactor(param.relaxationFactor);
+    using RegistrationType = AlphaBSplineRegistration<ImageType, DistType, 3U>;
+    using RegistrationPointer = typename RegistrationType::Pointer;
 
-	OptimizerType::ScalesType scaling(Dim * (Dim + 1));
+    RegistrationPointer reg = RegistrationType::New();
 
-	double fixedImageSz = IPT::ComputeImageDiagonalSize(fixedImage, true);
-	double movingImageSz = IPT::ComputeImageDiagonalSize(movingImage, true);
+    using PointSamplerType = PointSamplerBase<ImageType, itk::Image<bool, Dim>, ImageType>;
+    using PointSamplerPointer = typename PointSamplerType::Pointer;
+    
+    PointSamplerPointer sampler1; 
+    PointSamplerPointer sampler2;
+    constexpr double SIGMA = 0.5;
+    
+    if(param.samplingMode == "gw" || param.samplingMode == "gw50")
+    {
+        sampler1 = CreateHybridPointSampler(fixedImage, fixedMask, 0.5, false, SIGMA, param.seed);
+        sampler2 = CreateHybridPointSampler(movingImage, movingMask, 0.5, false, SIGMA, param.seed);
+    } else if(param.samplingMode == "gw25")
+    {
+        sampler1 = CreateHybridPointSampler(fixedImage, fixedMask, 0.25, false, SIGMA, param.seed);
+        sampler2 = CreateHybridPointSampler(movingImage, movingMask, 0.25, false, SIGMA, param.seed);
+    } else if(param.samplingMode == "gw75")
+    {
+        sampler1 = CreateHybridPointSampler(fixedImage, fixedMask, 0.75, false, SIGMA, param.seed);
+        sampler2 = CreateHybridPointSampler(movingImage, movingMask, 0.75, false, SIGMA, param.seed);
+    } else if(param.samplingMode == "quasi")
+    {
+        sampler1 = CreateQuasiRandomPointSampler(fixedImage, fixedMask, param.seed);
+        sampler2 = CreateQuasiRandomPointSampler(movingImage, movingMask, param.seed);
+    } else if(param.samplingMode == "uniform")
+    {
+        sampler1 = CreateUniformPointSampler(fixedImage, fixedMask, param.seed);
+        sampler2 = CreateUniformPointSampler(movingImage, movingMask, param.seed);
+    }
 
-	const double scaleMultiplier = 1.5;
+    reg->SetPointSamplerRefImage(sampler1);
+    reg->SetPointSamplerFloImage(sampler2);
 
-	const double diag = scaleMultiplier * 0.5 * (fixedImageSz + movingImageSz);
+    reg->SetDistDataStructRefImage(distStructRefImage);
+    reg->SetDistDataStructFloImage(distStructFloImage);
 
-	const double scale_translation = 1.0 / diag;
+    constexpr unsigned int iterations = 1000U;
+    constexpr double learningRate = 0.8;
+    constexpr double momentum = 0.1;
+    constexpr double symmetryLambda = 0.05;
 
-	//const double scale_translation = 1.0 / (sqrt(2) * 256.0);
+    unsigned int sampleCountRefToFlo = 128;
+    unsigned int sampleCountFloToRef = 128;
 
-	scaling.Fill(1.0);
+    reg->SetTransformRefToFlo(transformForward);
+    reg->SetTransformFloToRef(transformInverse);
 
-	for(unsigned int i = 0; i < Dim; ++i) {
-		scaling[Dim * Dim + i] = scale_translation;
-	}
+    itk::TimeProbesCollectorBase chronometer;
+    itk::MemoryProbesCollectorBase memorymeter;
 
-	optimizer->SetScales(scaling);
+    for (int q = 0; q < param.innerParams.size(); ++q) {
+        double lr1 = param.innerParams[q].learningRate;
+        unsigned int iterations = param.innerParams[q].iterations;
+        unsigned int controlPoints = param.innerParams[q].controlPoints;
 
-	//General optimizer parameters
+        sampleCountRefToFlo = ImagePixelCount(fixedImage) * param.innerParams[q].samplingFraction;
+        sampleCountFloToRef = ImagePixelCount(movingImage) * param.innerParams[q].samplingFraction;
 
-	// Set a stopping criterion
-	optimizer->SetNumberOfIterations(param.iterations);
-	optimizer->SetReturnBestParametersAndValue(true);
+        reg->SetSampleCountRefToFlo(sampleCountRefToFlo);
+        reg->SetSampleCountFloToRef(sampleCountFloToRef);
+        reg->SetIterations(iterations);
+        reg->SetLearningRate(lr1);
+        reg->SetSymmetryLambda(param.innerParams[q].lambdaFactor);
 
-	registration->SetMovingInitialTransform(compositeMovingTransform);
+        if(q > 0) {
+            TransformPointer tforNew = CreateBSplineTransform(fixedImage, controlPoints);
+            TransformPointer tinvNew = CreateBSplineTransform(movingImage, controlPoints);
+            int curNumberOfGridNodes = controlPoints;
+            UpsampleBSplineTransform(fixedImage, tforNew, transformForward, curNumberOfGridNodes);
+            UpsampleBSplineTransform(movingImage, tinvNew, transformInverse, curNumberOfGridNodes);
+            transformForward = tforNew;
+            transformInverse = tinvNew;
+        }
 
-	registration->SetFixedImage(fixedImage);
-	registration->SetMovingImage(movingImage);
+        if (param.enableCallbacks) {
+            callback->SetTransforms(transformForward, transformInverse);
+            reg->AddCallback(callback);
+        }
 
-	unsigned int numberOfLevels = (unsigned int)param.multiscaleSamplingFactors.size();
+        reg->SetTransformRefToFlo(transformForward);
+        reg->SetTransformFloToRef(transformInverse);
+        reg->Initialize();
 
-	typename RegistrationType::ShrinkFactorsArrayType shrinkFactorsPerLevel;
-	shrinkFactorsPerLevel.SetSize(numberOfLevels);
+        std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
 
-	typename RegistrationType::SmoothingSigmasArrayType smoothingSigmasPerLevel;
-	smoothingSigmasPerLevel.SetSize(numberOfLevels);
-	for(unsigned int i = 0; i < numberOfLevels; ++i) {
-		shrinkFactorsPerLevel[i] = param.multiscaleSamplingFactors[i];
-		smoothingSigmasPerLevel[i] = param.multiscaleSmoothingSigmas[i];
-	}
+        reg->Run();
 
-	registration->SetNumberOfLevels(numberOfLevels);
-	registration->SetSmoothingSigmasPerLevel(smoothingSigmasPerLevel);
-	registration->SetShrinkFactorsPerLevel(shrinkFactorsPerLevel);
+        std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+        std::cout << "Time elapsed: " << std::chrono::duration_cast<std::chrono::seconds>(end - begin).count() << "[s]" << std::endl;
 
-	typename RegistrationType::MetricSamplingStrategyType  samplingStrategy =
-		RegistrationType::RANDOM;
+        transformForward = reg->GetTransformRefToFlo();
+        transformInverse = reg->GetTransformFloToRef();
+    }
 
-	registration->SetMetricSamplingStrategy(samplingStrategy);
-	registration->SetMetricSamplingPercentage(param.samplingPercentage);
-	registration->MetricSamplingReinitializeSeed(param.metricSeed);
+    //chronometer.Report(std::cout);
+    //memorymeter.Report(std::cout);
+}
 
-	registration->SetMetric(metric);
-	registration->SetOptimizer(optimizer);
-
-	optimizer->SetNumberOfThreads(1);
-	registration->SetNumberOfThreads(1);
-
-	if(param.iterations > 0) {
-		try
-		{
-			registration->Update();
-			std::cout << "Optimizer stop condition: "
-				<< registration->GetOptimizer()->GetStopConditionDescription()
-				<< std::endl;
-		}
-		catch (itk::ExceptionObject & err)
-		{
-			std::cerr << "ExceptionObject caught !" << std::endl;
-			std::cerr << err << std::endl;
-		}
-		std::cout << "Number of iterations elapsed: " << optimizer->GetCurrentIteration() << std::endl;
-	}
-
-	if(distanceOut)
-	{
-		*distanceOut = registration->GetOptimizer()->GetCurrentMetricValue();
-	}
-
-	auto modifiableTransform = registration->GetModifiableTransform();
-	std::cout << modifiableTransform << std::endl;
-
-	return modifiableTransform;
-    */
 
 template <typename MT>
 void register_func_baseline(typename ImageType::Pointer fixedImage, typename ImageType::Pointer movingImage, TransformPointer& transformForward, TransformPointer& transformInverse, BSplineRegParam param, ImagePointer fixedMask, ImagePointer movingMask, typename MT::Pointer metric, bool verbose=false)
@@ -1045,7 +1115,8 @@ void bspline_register(
     ImagePointer movingMask,
     bool verbose,
     TransformPointer& transformForwardOut,
-    TransformPointer& transformInverseOut) {
+    TransformPointer& transformInverseOut,
+    CallbackType* callback) {
 
     TransformPointer transformForward;
     TransformPointer transformInverse;
@@ -1083,7 +1154,10 @@ void bspline_register(
         }
 
         //typename ImageType::Pointer fixedImage, typename ImageType::Pointer movingImage, TransformPointer& transformForward, TransformPointer& transformInverse, BSplineRegParam param, ImagePointer fixedMask, ImagePointer movingMask, bool verbose=false
-        register_func(fixedImagePrime, movingImagePrime, transformForward, transformInverse, paramSet, fixedMaskPrime, movingMaskPrime, verbose);       
+        // Here we can switch between (1) the distance transform-based method
+        //register_func(fixedImagePrime, movingImagePrime, transformForward, transformInverse, paramSet, fixedMaskPrime, movingMaskPrime, verbose);       
+        // or (2) the monte carlo-based method
+        mcalpha_register_func(fixedImagePrime, movingImagePrime, transformForward, transformInverse, paramSet, fixedMaskPrime, movingMaskPrime, verbose, callback);       
     }
 
     transformForwardOut = transformForward;
