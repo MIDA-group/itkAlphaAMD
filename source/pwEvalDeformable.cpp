@@ -475,7 +475,7 @@ class PWEvalDeformable
             refImageMask = nullptr;
             floImageMask = nullptr;
 
-            if(transformsPath.length() < 260) {
+            if(transformsPath.length() > 260) {
                 std::cerr << "Error. Too long transform path." << std::endl;
                 exit(-1);
             }
