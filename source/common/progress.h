@@ -42,7 +42,7 @@ public:
         buf.append("]");
 
         char buf2[512];
-        sprintf(buf2, " %.2f%%", 100.0 * fraction + 0.5);
+        sprintf(buf2, " %.2f%%", 100.0 * fraction);
  
         buf.append(buf2);
 
