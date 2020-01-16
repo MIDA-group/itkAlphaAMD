@@ -60,6 +60,8 @@
         "iterator": "cpp",
         "map": "cpp",
         "memory_resource": "cpp",
-        "set": "cpp"
+        "set": "cpp",
+        "condition_variable": "cpp",
+        "mutex": "cpp"
     }
 }

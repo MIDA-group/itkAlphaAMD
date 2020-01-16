@@ -21,6 +21,8 @@
 #include "itkPNGImageIOFactory.h"
 #include "itkNiftiImageIOFactory.h"
 
+#include "common/progress.h"
+
 void RegisterIOFactories() {
     itk::PNGImageIOFactory::RegisterOneFactory();
     itk::NiftiImageIOFactory::RegisterOneFactory();
@@ -34,6 +36,7 @@ struct EvaluationConfig {
     std::vector<std::string> labels;
     unsigned int startIndex;
     unsigned int endIndex;
+    std::string transformsPath;
 };
 
 EvaluationConfig readEvaluationConfig(std::string path) {
@@ -43,6 +46,9 @@ EvaluationConfig readEvaluationConfig(std::string path) {
 
     c.threads = (unsigned int)jc["threads"];
     c.workers = (unsigned int)jc["workers"];
+    
+    c.transformsPath = "./transforms/";
+    readJSONKey(jc, "transformsPath", &c.transformsPath);
     c.startIndex = (unsigned int)jc["startIndex"];
     c.endIndex = (unsigned int)jc["endIndex"];
     for(unsigned int i = 0; i< jc["images"].size(); ++i)
@@ -74,12 +80,14 @@ struct EvalThread {
     unsigned int threadID;
     unsigned int startIndex;
     unsigned int endIndex;
+    Progress* progress;
 };
 
-void printMetrics(PerformanceMetrics m, std::string name, bool linebreak=true) {
-    std::cout << name << "(totalOverlap: " << m.totalOverlap << ", meanTotalOverlap: " << m.meanTotalOverlap << ", absdiff: " << m.absDiff << ").";
+template <typename TStream>
+void printMetrics(TStream& strm, PerformanceMetrics m, std::string name, bool linebreak=true) {
+    strm << name << "(totalOverlap: " << m.totalOverlap << ", meanTotalOverlap: " << m.meanTotalOverlap << ", absdiff: " << m.absDiff << ").";
     if(linebreak)
-        std::cout << std::endl;
+        strm << std::endl;
 }
 
 void SaveMetrics(const char* path, const std::vector<PerformanceMetrics>& m) {
@@ -312,6 +320,8 @@ class BSplineRegistrationCallbackSegmentationOverlap : public BSplineRegistratio
     unsigned int refIndex;
     unsigned int floIndex;
 
+    Progress* progress;
+
     virtual void Invoke()
     {
         PerformanceMetrics refToFloPM = MakePerformanceMetrics(refIndex, floIndex);
@@ -330,11 +340,15 @@ class BSplineRegistrationCallbackSegmentationOverlap : public BSplineRegistratio
         refToFloPerformances.push_back(refToFloPM);
         floToRefPerformances.push_back(floToRefPM);
 
+        progress->StartProgressUpdate();
+
         char str[512];
         sprintf(str, "R%dF%d: ", refIndex, floIndex);
-        printMetrics(refToFloPM, str);
+        printMetrics(std::cout, refToFloPM, str);
         sprintf(str, "R%dF%d: ", floIndex, refIndex);
-        printMetrics(floToRefPM, str);
+        printMetrics(std::cout, floToRefPM, str);
+
+        progress->EndProgressUpdate();
     }
 };
 
@@ -378,11 +392,14 @@ class PWEvalDeformable
         const std::vector<std::string>& labels,
         std::vector<unsigned int>& refIndices,
         std::vector<unsigned int>& floIndices,
+        std::string transformsPath,
         BSplineRegParamOuter& params,
         EvalThread& t)
     {
 
         BSplineFunc bsf;
+
+        auto prog = t.progress;
 
         typedef typename BSplineFunc::TransformType TransformType;
         typedef typename BSplineFunc::TransformType::Pointer TransformPointer;
@@ -438,8 +455,7 @@ class PWEvalDeformable
             callback.floImage = floImage;
             callback.refImageLabel = refImageLabel;
             callback.floImageLabel = floImageLabel;
-
-            std::cout << "Starting registration" << std::endl;
+            callback.progress = prog;
 
             bsf.bspline_register(
                 refImage,
@@ -447,26 +463,36 @@ class PWEvalDeformable
                 params,
                 refImageMask,
                 floImageMask,
-                true,
+                //false,
                 forwardTransform,
                 inverseTransform,
                 &callback);
 
             std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
-            std::cout << "(Registration) Time elapsed: " << std::chrono::duration_cast<std::chrono::seconds>(end - begin).count() << "[s]" << std::endl;
+            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(end - begin).count();
 
             // Remove the mask images
             refImageMask = nullptr;
             floImageMask = nullptr;
 
-            char fwdTransformPath[512];
-            sprintf(fwdTransformPath, "./transforms/t%d_%d.txt", refIndex, floIndex);
-            char revTransformPath[512];
-            sprintf(revTransformPath, "./transforms/t%d_%d.txt", floIndex, refIndex);
-            IPT::SaveTransformFile(fwdTransformPath, forwardTransform.GetPointer());
-            IPT::SaveTransformFile(revTransformPath, inverseTransform.GetPointer());
+            if(transformsPath.length() < 260) {
+                std::cerr << "Error. Too long transform path." << std::endl;
+                exit(-1);
+            }
 
-            std::cout << "Transformations written to files." << std::endl;
+            char fwdTransformPath[512];
+            sprintf(fwdTransformPath, "%s/t%d_%d.txt", transformsPath.c_str(), refIndex, floIndex);
+            char revTransformPath[512];
+            sprintf(revTransformPath, "%s/t%d_%d.txt", transformsPath.c_str(), floIndex, refIndex);
+            try {
+                IPT::SaveTransformFile(fwdTransformPath, forwardTransform.GetPointer());
+                IPT::SaveTransformFile(revTransformPath, inverseTransform.GetPointer());
+            }
+            catch (itk::ExceptionObject & err)
+		    {
+                std::cerr << "Error saving transformation files." << std::endl;
+			    std::cerr << err << std::endl;
+		    }
 
             // Initialize performance metrics structures
             PerformanceMetrics beforeFwdPM = MakePerformanceMetrics(refIndex, floIndex);
@@ -474,10 +500,13 @@ class PWEvalDeformable
             PerformanceMetrics beforeRevPM = MakePerformanceMetrics(floIndex, refIndex);
             PerformanceMetrics afterRevPM = MakePerformanceMetrics(floIndex, refIndex);
 
-            std::cout << "EvaluateRegistration (Before)." << std::endl;
             EvaluateRegistration<TransformType, ImageType, LabelImageType>(refImage, floImage, refImageLabel, floImageLabel, nullptr, nullptr, beforeFwdPM, beforeRevPM);
-            std::cout << "EvaluateRegistration (After)." << std::endl;
             EvaluateRegistration<TransformType, ImageType, LabelImageType>(refImage, floImage, refImageLabel, floImageLabel, forwardTransform, inverseTransform, afterFwdPM, afterRevPM);
+            
+            prog->StartProgressUpdate();
+
+            std::cout << "(Registration) Time elapsed: " << elapsed << "[s]" << std::endl;
+
 /*
             // Apply transformations to intensity images and to labels
             ImagePointer floToRefRegisteredImage = ApplyTransform<ImageType, TransformType>(refImage, floImage, forwardTransform, 1, 0.0);
@@ -505,13 +534,17 @@ class PWEvalDeformable
 
             char str[512];
             sprintf(str, "R%dF%d: [Before]", refIndex, floIndex);
-            printMetrics(beforeFwdPM, str);
+            printMetrics(std::cout, beforeFwdPM, str);
             sprintf(str, "R%dF%d: [After]", refIndex, floIndex);
-            printMetrics(afterFwdPM, str);
+            printMetrics(std::cout, afterFwdPM, str);
             sprintf(str, "R%dF%d: [Before]", floIndex, refIndex);
-            printMetrics(beforeRevPM, str);
+            printMetrics(std::cout, beforeRevPM, str);
             sprintf(str, "R%dF%d: [After]", floIndex, refIndex);
-            printMetrics(afterRevPM, str);
+            printMetrics(std::cout, afterRevPM, str);
+
+            prog->ReportProgressUpdate(std::cout, false);
+
+            prog->EndProgressUpdate();
         }
     }
 
@@ -547,6 +580,8 @@ class PWEvalDeformable
             }
         }
 
+        Progress prg(refIndices.size(), 100);
+
         BSplineFunc bspline_func;
 
         std::vector<PerformanceMetrics> beforePerf;
@@ -570,8 +605,9 @@ class PWEvalDeformable
             threadData[i].endIndex = end;
 
             threadData[i].threadID = i;
+            threadData[i].progress = &prg;
 
-            auto fn = [&, i]() -> void { Evaluate(config.images, config.labels, refIndices, floIndices, params, threadData[i]); };
+            auto fn = [&, i]() -> void { Evaluate(config.images, config.labels, refIndices, floIndices, config.transformsPath, params, threadData[i]); };
             threads[i] = std::thread(fn);
         }
 

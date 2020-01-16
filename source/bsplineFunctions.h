@@ -106,6 +106,7 @@ struct BSplineRegParam
     double lambdaFactor;
     unsigned long long seed;
     bool enableCallbacks;
+    bool verbose;
     std::string samplingMode;
     std::vector<BSplineRegParamInner> innerParams;
 };
@@ -174,6 +175,8 @@ BSplineRegParamOuter readConfig(std::string path) {
         readJSONKey(m_i, "seed", &paramSet.seed);
         paramSet.enableCallbacks = false;
         readJSONKey(m_i, "enableCallbacks", &paramSet.enableCallbacks);
+        paramSet.verbose = false;
+        readJSONKey(m_i, "verbose", &paramSet.verbose);
 
         //auto innerConfig = config[i]["inner"];
         //std::cout << "Access innerConfig" << i << " of size " << jc["paramSets"][i]["innerParams"].size() << std::endl;
@@ -943,7 +946,9 @@ void mcalpha_register_func(typename ImageType::Pointer fixedImage, typename Imag
         reg->Run();
 
         std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
-        std::cout << "Time elapsed: " << std::chrono::duration_cast<std::chrono::seconds>(end - begin).count() << "[s]" << std::endl;
+        if(verbose) {
+            std::cout << "Time elapsed: " << std::chrono::duration_cast<std::chrono::seconds>(end - begin).count() << "[s]" << std::endl;
+        }
 
         transformForward = reg->GetTransformRefToFlo();
         transformInverse = reg->GetTransformFloToRef();
@@ -1113,7 +1118,7 @@ void bspline_register(
     BSplineRegParamOuter param,
     ImagePointer fixedMask,
     ImagePointer movingMask,
-    bool verbose,
+    //bool verbose,
     TransformPointer& transformForwardOut,
     TransformPointer& transformInverseOut,
     CallbackType* callback) {
@@ -1157,7 +1162,7 @@ void bspline_register(
         // Here we can switch between (1) the distance transform-based method
         //register_func(fixedImagePrime, movingImagePrime, transformForward, transformInverse, paramSet, fixedMaskPrime, movingMaskPrime, verbose);       
         // or (2) the monte carlo-based method
-        mcalpha_register_func(fixedImagePrime, movingImagePrime, transformForward, transformInverse, paramSet, fixedMaskPrime, movingMaskPrime, verbose, callback);       
+        mcalpha_register_func(fixedImagePrime, movingImagePrime, transformForward, transformInverse, paramSet, fixedMaskPrime, movingMaskPrime, paramSet.verbose, callback);       
     }
 
     transformForwardOut = transformForward;
