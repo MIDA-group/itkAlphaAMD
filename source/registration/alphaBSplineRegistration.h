@@ -425,22 +425,6 @@ private:
     const double doubleWeight = invLambdaValueWeighted + lambdaWeighted;
     value += FixedPointFromDouble(doubleValue);
     weight += FixedPointFromDouble(doubleWeight);
-    /*
-    if(value < 0.0 || weight < 0.0)
-    {
-        std::cout << "Sampled Point: " << pointSample.m_Point << std::endl;
-        std::cout << "Transformed Point: " << transformedPoint << std::endl;
-        std::cout << "Returned Point: " << returnedPoint << std::endl;
-        std::cout << "IsInside1: " << isInside1 << std::endl;
-        std::cout << "IsInside: " << isInside << std::endl;
-        std::cout << "LocalValue: " << localValue << std::endl;
-        std::cout << "symLossValue: " << symLossValue << std::endl;
-        std::cout << "symVec" << symLossVec << std::endl;
-        std::cout << "w: " << w << std::endl;
-        std::cout << "Double: " << doubleValue << ", " << doubleWeight << std::endl;
-        std::cout << "Fixed: " << value << ", " << weight << std::endl;
-        exit(0);
-    }*/
 
 	// Compute jacobian for metric and symmetry loss
 	for (unsigned int dim = 0; dim < Dim; ++dim)
