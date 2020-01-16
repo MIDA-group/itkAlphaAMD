@@ -7,7 +7,7 @@ Author: Johan Öfverstedt
 
 Requirements/Dependencies:
 
-ITK 4.x (tested with 4.9).
+ITK 5.01
 
 CMake
 
