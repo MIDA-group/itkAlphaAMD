@@ -737,6 +737,10 @@ public:
         m_Callbacks.push_back(cmd);
     }
 
+    virtual void SetPrintInterval(unsigned int interval) {
+        m_PrintInterval = interval;
+    }
+
     virtual double GetValue() const
     {
         return m_Value;

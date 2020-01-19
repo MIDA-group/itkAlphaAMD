@@ -937,6 +937,9 @@ void mcalpha_register_func(typename ImageType::Pointer fixedImage, typename Imag
             reg->AddCallback(callback);
         }
 
+        if (verbose) {
+            reg->SetPrintInterval(1U);
+        }
         reg->SetTransformRefToFlo(transformForward);
         reg->SetTransformFloToRef(transformInverse);
         reg->Initialize();
