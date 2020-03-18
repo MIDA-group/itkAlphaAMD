@@ -33,6 +33,7 @@
 
 #include "itkAdditiveGaussianNoiseImageFilter.h"
 #include "itkDiscreteGaussianImageFilter.h"
+#include "itkMedianImageFilter.h"
 
 #include "itkCSVArray2DFileReader.h"
 #include "itkTransformFileReader.h"
@@ -2455,6 +2456,36 @@ class IPT
         gaussianFilter->Update();
 
         return gaussianFilter->GetOutput();
+    }
+
+    static ImagePointer MedianFilterImage(
+        ImagePointer image,
+        double radius)
+    {
+        if(radius <= 0.0)
+            return image;
+
+        typedef itk::MedianImageFilter<
+            ImageType, ImageType>
+            FilterType;
+
+        // Create and setup a Gaussian filter
+        typename FilterType::Pointer filter = FilterType::New();
+
+        auto spacing = image->GetSpacing();
+        typename FilterType::InputSizeType rad;
+        for (unsigned int i = 0; i < Dim; ++i) {
+            rad[i] = static_cast<typename ImageType::SizeValueType>(spacing[i] * radius + 0.5);
+            if(rad[i] == 0) {
+                return image;
+            }
+        }
+
+        filter->SetInput(image);
+        filter->SetRadius(rad);
+        filter->Update();
+
+        return filter->GetOutput();
     }
 
     static void SaturateImage(

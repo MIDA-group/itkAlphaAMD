@@ -457,6 +457,8 @@ class PWEvalDeformable
             callback.floImageLabel = floImageLabel;
             callback.progress = prog;
 
+            std::cout << "Registration to commence." << std::endl;
+
             bsf.bspline_register(
                 refImage,
                 floImage,
@@ -467,6 +469,33 @@ class PWEvalDeformable
                 forwardTransform,
                 inverseTransform,
                 &callback);
+
+            // Registered image
+
+            {
+
+                auto registeredImage = ApplyTransformToImage<ImageType, TransformType>(
+                    refImage,
+                    floImage,
+                    forwardTransform,
+                    1,
+                    0);
+
+                auto registeredCBImage = ApplyTransformToImage<ImageType, TransformType>(
+                    refImage,
+                    BlackAndWhiteChessboard(floImage, 512),
+                    forwardTransform,
+                    1,
+                    0);
+
+                char sbuf[512];
+                sprintf(sbuf, "./out_%d_%d.png", refIndex, floIndex);
+                IPT::SaveImageU8(sbuf, registeredImage);
+
+                sprintf(sbuf, "./cb_%d_%d.png", refIndex, floIndex);
+                IPT::SaveImageU8(sbuf, registeredCBImage);
+
+            }
 
             std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
             auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(end - begin).count();

@@ -48,9 +48,9 @@ static void DoTransform(TransformProgramParam &param)
 	typedef typename IPT::ImagePointer ImagePointer;
 	typedef itk::Image<unsigned short, Dim> LabelImageType;
 
-	itk::MultiThreader::SetGlobalMaximumNumberOfThreads(1);
-	itk::MultiThreader::SetGlobalDefaultNumberOfThreads(1);
-    itk::OutputWindow::SetInstance(itk::TextOutput::New());
+	//itk::MultiThreader::SetGlobalMaximumNumberOfThreads(1);
+	//itk::MultiThreader::SetGlobalDefaultNumberOfThreads(1);
+    //itk::OutputWindow::SetInstance(itk::TextOutput::New());
 
 	typename IPT::SpacingMode spacingMode = IPT::kDefaultSpacingMode;
 	if (param.spacingMode == kDefaultSpacing)
@@ -137,6 +137,8 @@ static void DoTransform(TransformProgramParam &param)
 		transform,
 		static_cast<typename IPT::ImwarpInterpolationMode>(param.interpolationMode),
 		bgVal);
+
+	IPT::SaturateImage(finalImage, 0.0, 1.0);
 
 	itk::PrintStatistics<ImageType>(finalImage, "Transformed");
 

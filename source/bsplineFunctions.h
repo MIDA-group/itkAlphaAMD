@@ -33,6 +33,7 @@
 
 #include "itkCheckerBoardImageFilter.h"
 #include "itkTransformToDisplacementFieldFilter.h"
+#include "itkVectorImageToImageAdaptor.h"
 #include "itkFlatStructuringElement.h"
 #include "itkBinaryDilateImageFilter.h"
 
@@ -45,6 +46,7 @@
 #include "itkMattesMutualInformationImageToImageMetricv4.h"
 #include "itkRegistrationParameterScalesFromPhysicalShift.h"
 
+#include "registration/alphaLinearRegistration.h"
 #include "registration/alphaBSplineRegistration.h"
 #include "samplers/pointSampler.h"
 #include "metric/mcAlphaCutPointToSetDistance.h"
@@ -98,6 +100,7 @@ struct BSplineRegParam
     double samplingFraction;
     unsigned long long downsamplingFactor;
     double smoothingSigma;
+    std::string smoothingMode;
     unsigned long long alphaLevels;
     bool gradientMagnitude;
     double normalization;
@@ -157,6 +160,8 @@ BSplineRegParamOuter readConfig(std::string path) {
         readJSONKey(m_i, "downsamplingFactor", &paramSet.downsamplingFactor);
         paramSet.smoothingSigma = 0.0;
         readJSONKey(m_i, "smoothingSigma", &paramSet.smoothingSigma);
+        paramSet.smoothingMode = "gaussian";
+        readJSONKey(m_i, "smoothingMode", &paramSet.smoothingMode);
         paramSet.alphaLevels = 7;
         readJSONKey(m_i, "alphaLevels", &paramSet.alphaLevels);
         paramSet.gradientMagnitude = false;
@@ -467,6 +472,67 @@ TransformPointer CreateBSplineTransform(ImagePointer image, unsigned int numberO
     transform->SetTransformDomainDirection(image->GetDirection());
 
     return transform;
+}
+
+// Note: See if this can be improved... I suspect so /Johan
+void LinearToBSplineTransform(
+    ImagePointer image,
+    TransformPointer newTransform,
+    typename itk::Transform<double, Dim, Dim>::Pointer oldTransform,
+    unsigned int numberOfGridNodes)
+{
+    typedef typename TransformType::ParametersType ParametersType;
+    ParametersType parameters(newTransform->GetNumberOfParameters());
+    parameters.Fill(0.0);
+
+    DisplacementFieldImagePointer disp =
+        TransformToDisplacementField<itk::Transform<double, Dim, Dim> >(oldTransform, image);//newTransform->GetCoefficientImages()[0]
+
+    using ImageAdaptorType = itk::VectorImageToImageAdaptor<double, Dim>;
+    using ImageAdaptorPointer = typename ImageAdaptorType::Pointer;
+
+    unsigned int counter = 0;
+    for (unsigned int k = 0; k < ImageDimension; k++)
+    {
+        using ParametersImageType = typename TransformType::ImageType;
+        using ResamplerType = itk::ResampleImageFilter<ParametersImageType, ParametersImageType>;
+        typename ResamplerType::Pointer upsampler = ResamplerType::New();
+        using FunctionType = itk::BSplineResampleImageFunction<ParametersImageType, double>;
+        typename FunctionType::Pointer function = FunctionType::New();
+        using IdentityTransformType = itk::IdentityTransform<double, ImageDimension>;
+        typename IdentityTransformType::Pointer identity = IdentityTransformType::New();
+        
+        ImageAdaptorPointer adaptor = ImageAdaptorType::New();
+        adaptor->SetExtractComponentIndex(k);
+        adaptor->SetImage(disp->GetDisplacementField());
+
+        upsampler->SetInput(adaptor->GetOutput());
+        upsampler->SetInterpolator(function);
+        upsampler->SetTransform(identity);
+        upsampler->SetSize(newTransform->GetCoefficientImages()[k]->GetLargestPossibleRegion().GetSize());
+        upsampler->SetOutputSpacing(
+            newTransform->GetCoefficientImages()[k]->GetSpacing());
+        upsampler->SetOutputOrigin(
+            newTransform->GetCoefficientImages()[k]->GetOrigin());
+        upsampler->SetOutputDirection(image->GetDirection());
+        using DecompositionType =
+            itk::BSplineDecompositionImageFilter<ParametersImageType, ParametersImageType>;
+        typename DecompositionType::Pointer decomposition = DecompositionType::New();
+        decomposition->SetSplineOrder(splineOrder);
+        decomposition->SetInput(upsampler->GetOutput());
+        decomposition->Update();
+        typename ParametersImageType::Pointer newCoefficients = decomposition->GetOutput();
+        // copy the coefficients into the parameter array
+        using Iterator = itk::ImageRegionIterator<ParametersImageType>;
+        Iterator it(newCoefficients,
+                    newTransform->GetCoefficientImages()[k]->GetLargestPossibleRegion());
+        while (!it.IsAtEnd())
+        {
+            parameters[counter++] = it.Get();
+            ++it;
+        }
+    }
+    newTransform->SetParameters(parameters);
 }
 
 void UpsampleBSplineTransform(ImagePointer image, TransformPointer newTransform, TransformPointer oldTransform, unsigned int numberOfGridNodes)
@@ -1121,7 +1187,6 @@ void bspline_register(
     BSplineRegParamOuter param,
     ImagePointer fixedMask,
     ImagePointer movingMask,
-    //bool verbose,
     TransformPointer& transformForwardOut,
     TransformPointer& transformInverseOut,
     CallbackType* callback) {
@@ -1129,11 +1194,25 @@ void bspline_register(
     TransformPointer transformForward;
     TransformPointer transformInverse;
 
+    // Do affine registration
+
+    //mcalpha_linear_register_func(fixedImagePrime, movingImagePrime, linearTransformForward, paramSet, fixedMaskPrime, movingMaskPrime, paramSet.verbose, callback);       
+
+    // Do deformable registration
     for(size_t i = 0; i < param.paramSets.size(); ++i) {
         auto paramSet = param.paramSets[i];
 
-        ImagePointer fixedImagePrime = IPT::SmoothImage(fixedImage, paramSet.smoothingSigma);
-        ImagePointer movingImagePrime = IPT::SmoothImage(movingImage, paramSet.smoothingSigma);
+        ImagePointer fixedImagePrime;
+        ImagePointer movingImagePrime;
+        if (paramSet.smoothingMode == "gaussian") {
+            fixedImagePrime = IPT::SmoothImage(fixedImage, paramSet.smoothingSigma);
+            movingImagePrime = IPT::SmoothImage(movingImage, paramSet.smoothingSigma);
+        } else if (paramSet.smoothingMode == "median") {
+            fixedImagePrime = IPT::MedianFilterImage(fixedImage, paramSet.smoothingSigma);
+            movingImagePrime = IPT::MedianFilterImage(movingImage, paramSet.smoothingSigma);
+        } else {
+            assert (false);
+        }
         ImagePointer fixedMaskPrime = fixedMask;
         ImagePointer movingMaskPrime = movingMask;
         if(paramSet.downsamplingFactor != 1) {
@@ -1161,10 +1240,6 @@ void bspline_register(
             transformInverse = tinvNew;            
         }
 
-        //typename ImageType::Pointer fixedImage, typename ImageType::Pointer movingImage, TransformPointer& transformForward, TransformPointer& transformInverse, BSplineRegParam param, ImagePointer fixedMask, ImagePointer movingMask, bool verbose=false
-        // Here we can switch between (1) the distance transform-based method
-        //register_func(fixedImagePrime, movingImagePrime, transformForward, transformInverse, paramSet, fixedMaskPrime, movingMaskPrime, verbose);       
-        // or (2) the monte carlo-based method
         mcalpha_register_func(fixedImagePrime, movingImagePrime, transformForward, transformInverse, paramSet, fixedMaskPrime, movingMaskPrime, paramSet.verbose, callback);       
     }
 
