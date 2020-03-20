@@ -29,6 +29,7 @@ void RegisterIOFactories() {
 }
 
 struct ProgramConfig {
+    std::string affineConfigPath;
     std::string configPath;
     unsigned int seed;
     unsigned int workers;
@@ -66,11 +67,12 @@ void readKeyValuePairForProgramConfig(int argc, char** argv, int startIndex, Pro
 ProgramConfig readProgramConfigFromArgs(int argc, char** argv) {
     ProgramConfig res;
 
-    res.configPath = argv[2];
-    res.refImagePath = argv[3];
-    res.floImagePath = argv[4];
-    res.outPathForward = argv[5];
-    res.outPathReverse = argv[6];
+    res.affineConfigPath = argv[2];
+    res.configPath = argv[3];
+    res.refImagePath = argv[4];
+    res.floImagePath = argv[5];
+    res.outPathForward = argv[6];
+    res.outPathReverse = argv[7];
 
     // Defaults for optional parameters
     res.seed = 1337;
@@ -78,7 +80,7 @@ ProgramConfig readProgramConfigFromArgs(int argc, char** argv) {
     res.refMaskPath = "";
     res.floMaskPath = "";
     
-    for (int i = 7; i+1 < argc; ++i) {
+    for (int i = 8; i+1 < argc; ++i) {
         readKeyValuePairForProgramConfig(argc, argv, i, res);
     }
 
@@ -101,6 +103,7 @@ class RegisterDeformableProgram
 
     static void Run(
         ProgramConfig cfg,
+        BSplineRegParamOuter& affineParams,
         BSplineRegParamOuter& params)
     {
 
@@ -159,11 +162,14 @@ class RegisterDeformableProgram
         TransformPointer forwardTransform;
         TransformPointer inverseTransform;
 
+        std::cerr << "Starting registration" << std::endl;
+
         std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
 
         bsf.bspline_register(
             refImage,
             floImage,
+            affineParams,
             params,
             refImageMask,
             floImageMask,
@@ -183,13 +189,22 @@ class RegisterDeformableProgram
             exit(-1);
         }
 
+        std::cerr << forwardTransform << std::endl;
         try {
             IPT::SaveTransformFile(cfg.outPathForward.c_str(), forwardTransform.GetPointer());
+        }
+        catch (itk::ExceptionObject & err)
+        {
+            std::cerr << "Error saving forward transformation file." << std::endl;
+	        std::cerr << err << std::endl;
+		}
+
+        try {
             IPT::SaveTransformFile(cfg.outPathReverse.c_str(), inverseTransform.GetPointer());
         }
         catch (itk::ExceptionObject & err)
         {
-            std::cerr << "Error saving transformation files." << std::endl;
+            std::cerr << "Error saving reverse transformation file." << std::endl;
 	        std::cerr << err << std::endl;
 		}
 
@@ -209,20 +224,22 @@ class RegisterDeformableProgram
 
         ProgramConfig config = readProgramConfigFromArgs(argc, argv);
         std::cout << "Program config read..." << std::endl;
+        BSplineRegParamOuter affineParams = readConfig(config.affineConfigPath);
+        std::cout << "Affine registration config read..." << std::endl;
         BSplineRegParamOuter params = readConfig(config.configPath);
-        std::cout << "Registration config read..." << std::endl;
+        std::cout << "Deformable Registration config read..." << std::endl;
 
         // Threading
         itk::MultiThreaderBase::SetGlobalMaximumNumberOfThreads(config.workers);
         itk::MultiThreaderBase::SetGlobalDefaultNumberOfThreads(config.workers);
 
-        Run(config, params);
+        Run(config, affineParams, params);
 
         chronometer.Stop("Registration");
         memorymeter.Stop("Registration");
 
-        chronometer.Report(std::cout);
-        memorymeter.Report(std::cout);
+        //chronometer.Report(std::cout);
+        //memorymeter.Report(std::cout);
 
         return 0;
     }
