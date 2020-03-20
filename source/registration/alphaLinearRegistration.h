@@ -9,6 +9,7 @@
 #include "itkDomainThreader.h"
 #include "itkThreadedIndexedContainerPartitioner.h"
 #include "itkTransform.h"
+#include "itkRigid2DTransform.h"
 
 #include <atomic>
 
@@ -45,18 +46,23 @@ void TransformStepOne(
     auto inverse2 = transform2->GetInverseTransform();
 
     if (!inverse1 || !inverse2) {
-        for (unsigned int i = 0; i < paramCount; ++i) {
-            out.SetElement(paramIndex, i, 0.0);
-        }
+        std::cerr << "Not invertible" << std::endl;
         return;
     }
 
     auto param1 = inverse1->GetParameters();
     auto param2 = inverse2->GetParameters();
 
-    for (unsigned int i = 0; i < paramCount; ++i) {
+    //double acc = 0.0;
+    for (unsigned int i = 0; i < paramCount; ++i)
+    {
         double diff_i = (param1[i] - param2[i]) / (2.0 * step);
-        out.SetElement(paramIndex, i, diff_i);
+        /*if (diff_i >= 0.0)
+            diff_i = 1.0;
+        else
+            diff_i = -1.0;*/
+        //acc += fabs(diff_i);
+        out.SetElement(i, paramIndex, diff_i);
     }
 }
 
@@ -69,6 +75,8 @@ void InverseDerivativeMatrix(TTransformType* transform, double step, itk::Array2
     for (unsigned int i = 0; i < count; ++i) {
         TransformStepOne<TTransformType>(transform, i, count, step, out);
     }
+
+    //std::cerr << out << std::endl;
 }
 
 template <typename TImageType, typename TDistType, typename TTransformType>
@@ -110,7 +118,11 @@ struct AlphaLinearRegistrationThreadState
     DistEvalContextPointer m_DistEvalContextRefImage;
     DistEvalContextPointer m_DistEvalContextFloImage;
 
-    void Initialize(unsigned int paramNumRefToFlo, unsigned int paramNumFloToRef, DistEvalContextPointer distEvalContextRefImage, DistEvalContextPointer distEvalContextFloImage)
+    void Initialize(
+        unsigned int paramNumRefToFlo,
+        unsigned int paramNumFloToRef,
+        DistEvalContextPointer distEvalContextRefImage,
+        DistEvalContextPointer distEvalContextFloImage)
     {
         m_ParamNumRefToFlo = paramNumRefToFlo;
         m_ParamNumFloToRef = paramNumFloToRef;
@@ -123,8 +135,8 @@ struct AlphaLinearRegistrationThreadState
         m_DerivativeFloToRef.reset(new FixedPointNumber[m_ParamNumFloToRef]);
         m_WeightsFloToRef.reset(new FixedPointNumber[m_ParamNumFloToRef]);
 
-        m_ParamJacobianRefToFlo.SetSize(m_ParamNumRefToFlo, TImageType::ImageDimension);
-        m_ParamJacobianFloToRef.SetSize(m_ParamNumFloToRef, TImageType::ImageDimension);
+        m_ParamJacobianRefToFlo.SetSize(TImageType::ImageDimension, m_ParamNumRefToFlo);
+        m_ParamJacobianFloToRef.SetSize(TImageType::ImageDimension, m_ParamNumFloToRef);
     }
 
     inline void StartIteration()
@@ -152,6 +164,10 @@ public:
   using ImageType = TImageType;
   using TransformType = TTransformType;
   using TransformPointer = typename TransformType::Pointer;
+  using InverseTransformType = TransformType;
+  using InverseTransformPointer = TransformPointer;
+  //using InverseTransformType = typename TTransformType::InverseTransformBaseType;
+  //using InverseTransformPointer = typename TTransformType::InverseTransformBasePointer;
 
   using DistType = TDistType;
   using DistPointer = typename DistType::Pointer;
@@ -216,8 +232,11 @@ private:
     itk::IndexValueType refToFloSampleCount = static_cast<itk::IndexValueType>(this->m_Associate->m_RefToFloSampleCount);
     itk::IndexValueType floToRefSampleCount = static_cast<itk::IndexValueType>(this->m_Associate->m_FloToRefSampleCount);
 
-    TransformType* transformRefToFlo = this->m_Associate->m_TransformRefToFloRawPtr;
-    TransformType* transformFloToRef = this->m_Associate->m_TransformFloToRefRawPtr;
+    TransformPointer transformRefToFloCopy = this->m_Associate->m_TransformRefToFlo->Clone();
+    InverseTransformPointer transformFloToRefCopy = this->m_Associate->m_TransformFloToRef->Clone();
+
+    TransformType* transformRefToFlo = transformRefToFloCopy.GetPointer();
+    InverseTransformType* transformFloToRef = transformFloToRefCopy.GetPointer();//this->m_Associate->m_TransformFloToRefRawPtr;
     PointSamplerType* pointSamplerRef = this->m_Associate->m_PointSamplerRefImage.GetPointer();
     PointSamplerType* pointSamplerFlo = this->m_Associate->m_PointSamplerFloImage.GetPointer();
 
@@ -243,8 +262,6 @@ private:
     FixedPointNumber weightFloToRefAcc = 0;
 
     PointSampleType pointSample;
-
-    const double lambda = this->m_Associate->m_SymmetryLambda;
 
     unsigned int endPointIndex = 0U;
     unsigned int totalCount = refToFloSampleCount + floToRefSampleCount;
@@ -346,7 +363,7 @@ private:
       PointSampleType& pointSample,
       DistType* distStruct,
       DistEvalContextType* distEvalContext,
-      TransformType* tfor,
+      itk::Transform<double, ImageDimension, ImageDimension>* tfor,
       FixedPointNumber& value,
       FixedPointNumber& weight,
       FixedPointNumber* dfor,
@@ -373,15 +390,12 @@ private:
         localValue,
         grad);
 
-    double w = pointSample.m_Weight;
-    double valueW;
-
     if(!flag) {
-        valueW = 0.0;
         return;
-    } else {
-        valueW = pointSample.m_Weight;
     }
+    
+    double w = pointSample.m_Weight;
+    double valueW = pointSample.m_Weight;
 
     const double doubleValue = valueW * localValue;
     const double doubleWeight = valueW;
@@ -404,10 +418,10 @@ private:
 	    	const double gradVal = grad[dim];
 
             const double valueWGradVal = doubleWeight * gradVal;
-            double sw = jacobianFor->GetElement(mu, dim);
+            double sw = jacobianFor.GetElement(dim, mu);
 
             d_mu += valueWGradVal * sw;
-            w_mu += doubleWeight * sw;
+            w_mu += doubleWeight;// * fabs(sw);
 		}
 
 		dfor[mu] -= FixedPointFromDouble(d_mu);
@@ -434,6 +448,10 @@ public:
 
   using TransformType = TTransformType;
   using TransformPointer = typename TransformType::Pointer;
+  using InverseTransformType = TransformType;
+  using InverseTransformPointer = TransformPointer;
+  //using InverseTransformType = typename TTransformType::InverseTransformBaseType;
+  //using InverseTransformPointer = typename TTransformType::InverseTransformBasePointer;
 
   using ThreadStateType = AlphaLinearRegistrationThreadState<ImageType, DistType, TransformType>;
 
@@ -475,6 +493,7 @@ private:
     constexpr double eps = 0.01;
 
     DerivativeType& derRefToFlo = this->m_Associate->m_DerivativeRefToFlo;
+    DerivativeType& derRefToFloMemory = this->m_Associate->m_DerivativeMemoryRefToFlo;
     DerivativeType& derFloToRef = this->m_Associate->m_DerivativeFloToRef;
     ThreadStateType* threadState = this->m_Associate->m_ThreadData.get();
 
@@ -528,7 +547,7 @@ private:
             weightVal += threadState[i].m_WeightsRefToFlo[localIndex];
         }
 
-        const double prevVal = derRefToFlo[localIndex];
+        const double prevVal = derRefToFloMemory[localIndex];
         const double normalized = DoubleFromFixedPoint(derVal) / (DoubleFromFixedPoint(weightVal)+eps);
         derRefToFlo[localIndex] = prevVal * momentum + invMomentum * normalized;
     }
@@ -591,6 +610,10 @@ public:
 
 	using TransformType = TTransformType;
 	using TransformPointer = typename TransformType::Pointer;
+    using InverseTransformType = TransformType;
+    using InverseTransformPointer = TransformPointer;
+    //using InverseTransformType = typename TTransformType::InverseTransformBaseType;
+    //using InverseTransformPointer = typename TTransformType::InverseTransformBasePointer;
     using DerivativeType = typename TransformType::DerivativeType;
 
     using PointSamplerType = PointSamplerBase<ImageType, itk::Image<bool, ImageDimension> , ImageType>;
@@ -613,7 +636,7 @@ public:
         return m_TransformRefToFlo;
     }
 
-    virtual TransformPointer GetTransformFloToRef() const
+    virtual InverseTransformPointer GetTransformFloToRef() const
     {
         return m_TransformFloToRef;
     }
@@ -623,8 +646,24 @@ public:
         m_TransformRefToFlo = transform;
         m_TransformRefToFloRawPtr = m_TransformRefToFlo.GetPointer();
 
-        m_TransformFloToRef = transform->GetInverseTransform();
+        m_DerivativeScaling.SetSize(m_TransformRefToFlo->GetNumberOfParameters());
+        m_DerivativeScaling.Fill(1.0);
+
+        m_TransformFloToRef = dynamic_cast<TransformType *>((transform->GetInverseTransform()).GetPointer());
+        // What to do here?
+        if(!m_TransformFloToRef) {
+            m_TransformFloToRef = transform->Clone();
+        }
+
         m_TransformFloToRefRawPtr = m_TransformFloToRef.GetPointer();
+    }
+
+    virtual void SetParameterScaling(const DerivativeType& derivativeScaling)
+    {
+        for (unsigned int i = 0; i < m_TransformRefToFlo->GetNumberOfParameters(); ++i)
+        {
+            m_DerivativeScaling[i] = derivativeScaling[i];
+        }
     }
 
     virtual void SetPointSamplerRefImage(PointSamplerPointer sampler)
@@ -655,11 +694,6 @@ public:
     virtual void SetMomentum(double momentum)
     {
         m_Momentum = momentum;
-    }
-
-    virtual void SetSymmetryLambda(double symmetryLambda)
-    {
-        m_SymmetryLambda = symmetryLambda;
     }
 
     virtual void SetIterations(unsigned int iterations)
@@ -700,6 +734,8 @@ public:
         m_DerivativeFloToRef.SetSize(m_TransformFloToRef->GetNumberOfParameters());
         m_DerivativeRefToFlo.Fill(0.0);
         m_DerivativeFloToRef.Fill(0.0);
+        m_DerivativeMemoryRefToFlo.SetSize(m_TransformRefToFlo->GetNumberOfParameters());
+        m_DerivativeMemoryRefToFlo.Fill(0.0);
 
 //    void Initialize(unsigned int paramNumRefToFlo, unsigned int paramNumFloToRef, unsigned int supportSize, DistEvalContextPointer distEvalContextRefImage, DistEvalContextPointer distEvalContextFloImage)
 
@@ -718,16 +754,13 @@ public:
 
         for(unsigned int i = m_ThreadsAllocated; i < threads; ++i)
         {
-            unsigned int supSizeRefToFlo = m_TransformRefToFlo->GetNumberOfAffectedWeights();
-            unsigned int supSizeFloToRef = m_TransformFloToRef->GetNumberOfAffectedWeights();
-
+            std::cerr << "Allocating thread " << i << std::endl;
             DistEvalContextPointer evalContext1 = m_DistDataStructRefImage->MakeEvalContext();
             DistEvalContextPointer evalContext2 = m_DistDataStructFloImage->MakeEvalContext();
+
             m_ThreadData[i].Initialize(
                 m_TransformRefToFlo->GetNumberOfParameters(),
                 m_TransformFloToRef->GetNumberOfParameters(),
-                supSizeRefToFlo,
-                supSizeFloToRef,
                 evalContext1,
                 evalContext2
             );
@@ -743,8 +776,14 @@ public:
         unsigned int iterations = m_Iterations;
         for(unsigned int i = 0; i < iterations; ++i)
         {
-            m_TransformFloToRef = m_TransformRefToFlo->GetInverseTransform();
-            m_TransformFloToRefRawPtr = m_TransformFloToRef.GetPointer();
+            InverseTransformPointer invMaybe = dynamic_cast<TransformType *>((m_TransformRefToFlo->GetInverseTransform()).GetPointer());//m_TransformRefToFlo->GetInverseTransform();
+            bool invertible = false;
+            if (invMaybe)
+            {
+                m_TransformFloToRef = invMaybe;
+                m_TransformFloToRefRawPtr = m_TransformFloToRef.GetPointer();
+                invertible = true;
+            }
 
             // Compute the distance value and derivatives for a sampled subset of the image
             typename VADThreaderType::DomainType completeDomain1;
@@ -768,16 +807,28 @@ public:
             unsigned int count1 = m_TransformRefToFlo->GetNumberOfParameters();
             unsigned int count2 = m_TransformFloToRef->GetNumberOfParameters();
 
-            itk::Array2D<double> invMatrix(count1, count2);
+            if (invertible) {
+                itk::Array2D<double> invMatrix(count1, count2);
+                InverseDerivativeMatrix<TransformType>(m_TransformRefToFlo.GetPointer(), 1e-7, invMatrix);
 
-            InverseDerivativeMatrix<TransformType>(m_TransformRefToFlo.GetPointer(), 1e-7, invMatrix);
-
-            for (unsigned int i = 0; i < count1; ++i) {
-                double acc = 0.0;
-                for (unsigned int j = 0; j < count2; ++j) {
-                    acc += invMatrix.GetElement(i, j) * m_DerivativeFloToRef[j];
+                for (unsigned int j = 0; j < count1; ++j) {
+                    double acc = 0.0;
+                    for (unsigned int k = 0; k < count2; ++k) {
+                        double w_k = invMatrix.GetElement(k, j);
+                        acc += w_k * m_DerivativeFloToRef[k];
+                    }
+                    m_DerivativeRefToFlo[j] = 0.5 * (m_DerivativeRefToFlo[j] + acc);
                 }
-                m_DerivativeRefToFlo[i] += acc;
+            } else {
+                std::cerr << "Not invertible" << std::endl;
+            }
+
+            // Scale parameters
+            
+            for (unsigned int j = 0; j < m_TransformRefToFlo->GetNumberOfParameters(); ++j)
+            {
+                m_DerivativeMemoryRefToFlo[j] = m_DerivativeRefToFlo[j];
+                m_DerivativeRefToFlo[j] *= m_DerivativeScaling[j];
             }
 
             m_TransformRefToFlo->UpdateTransformParameters(m_DerivativeRefToFlo, m_LearningRate);
@@ -789,13 +840,18 @@ public:
 
             if(m_PrintInterval > 0U && i % m_PrintInterval == 0)
             {
+                std::cout << m_TransformRefToFlo->GetParameters() << std::endl;
                 std::cout << "[" << i << "] Value: " << m_Value << std::endl;
             }
         }
 
         // Compute the final inverse (flo to ref) transformation
-        m_TransformFloToRef = m_TransformRefToFlo->GetInverseTransform();
-        m_TransformFloToRefRawPtr = m_TransformFloToRef.GetPointer();
+        InverseTransformPointer finalInvMaybe = dynamic_cast<TransformType *>((m_TransformRefToFlo->GetInverseTransform()).GetPointer());
+        if (finalInvMaybe)
+        {
+            m_TransformFloToRef = finalInvMaybe;
+            m_TransformFloToRefRawPtr = m_TransformFloToRef.GetPointer();
+        }
     }   
 protected:
     AlphaLinearRegistration()
@@ -803,7 +859,6 @@ protected:
         m_Value = 0.0;
         m_Momentum = 0.1;
         m_LearningRate = 1.0;
-        m_SymmetryLambda = 0.05;
         m_ThreadsAllocated = 0;
 
         m_RefToFloSampleCount = 4096;
@@ -818,9 +873,9 @@ protected:
 
     // Transformations
     TransformPointer m_TransformRefToFlo;
-    TransformPointer m_TransformFloToRef;
+    InverseTransformPointer m_TransformFloToRef;
     TransformType* m_TransformRefToFloRawPtr;
-    TransformType* m_TransformFloToRefRawPtr;
+    InverseTransformType* m_TransformFloToRefRawPtr;
 
     // Point samplers
     PointSamplerPointer m_PointSamplerRefImage;
@@ -833,7 +888,6 @@ protected:
     // Objective function and optimization parameters
     double m_Momentum;
     double m_LearningRate;
-    double m_SymmetryLambda;
 
     // Sampling parameters
     unsigned int m_RefToFloSampleCount;
@@ -864,6 +918,9 @@ protected:
     // Current/last derivative
     DerivativeType m_DerivativeRefToFlo;
     DerivativeType m_DerivativeFloToRef;
+    DerivativeType m_DerivativeMemoryRefToFlo;
+    
+    DerivativeType m_DerivativeScaling;
 
     friend class AlphaLinearRegistrationVADThreader<Self, ImageType, TransformType, DistType>;
     friend class AlphaLinearRegistrationStepThreader<Self, ImageType, TransformType, DistType>;

@@ -33,7 +33,8 @@
 
 #include "itkCheckerBoardImageFilter.h"
 #include "itkTransformToDisplacementFieldFilter.h"
-#include "itkVectorImageToImageAdaptor.h"
+//#include "itkVectorImageToImageAdaptor.h"
+#include "itkVectorIndexSelectionCastImageFilter.h"
 #include "itkFlatStructuringElement.h"
 #include "itkBinaryDilateImageFilter.h"
 
@@ -238,6 +239,8 @@ constexpr static unsigned int splineOrder = 3;
 
 typedef typename itk::BSplineTransform<double, ImageDimension, splineOrder> TransformType;
 typedef typename TransformType::Pointer TransformPointer;
+
+using DerivativeType = typename TransformType::DerivativeType;
 
 typedef itk::AlphaSMDObjectToObjectMetricDeformv4<ImageType, ImageDimension, double, splineOrder> MetricType;
 typedef typename MetricType::Pointer MetricPointer;
@@ -475,7 +478,7 @@ TransformPointer CreateBSplineTransform(ImagePointer image, unsigned int numberO
 }
 
 // Note: See if this can be improved... I suspect so /Johan
-void LinearToBSplineTransform(
+/*void LinearToBSplineTransform(
     ImagePointer image,
     TransformPointer newTransform,
     typename itk::Transform<double, Dim, Dim>::Pointer oldTransform,
@@ -488,7 +491,8 @@ void LinearToBSplineTransform(
     DisplacementFieldImagePointer disp =
         TransformToDisplacementField<itk::Transform<double, Dim, Dim> >(oldTransform, image);//newTransform->GetCoefficientImages()[0]
 
-    using ImageAdaptorType = itk::VectorImageToImageAdaptor<double, Dim>;
+    //using ImageAdaptorType = itk::VectorImageToImageAdaptor<double, Dim>;
+    using ImageAdaptorType = itk::VectorIndexSelectionCastImageFilter<DisplacementFieldImageType, ImageType>;
     using ImageAdaptorPointer = typename ImageAdaptorType::Pointer;
 
     unsigned int counter = 0;
@@ -503,8 +507,71 @@ void LinearToBSplineTransform(
         typename IdentityTransformType::Pointer identity = IdentityTransformType::New();
         
         ImageAdaptorPointer adaptor = ImageAdaptorType::New();
-        adaptor->SetExtractComponentIndex(k);
-        adaptor->SetImage(disp->GetDisplacementField());
+        //adaptor->SetExtractComponentIndex(k);
+        adaptor->SetIndex(k);
+        adaptor->SetInput(disp);
+
+        upsampler->SetInput(adaptor->GetOutput());
+        upsampler->SetInterpolator(function);
+        upsampler->SetTransform(identity);
+        upsampler->SetSize(newTransform->GetCoefficientImages()[k]->GetLargestPossibleRegion().GetSize());
+        upsampler->SetOutputSpacing(
+            newTransform->GetCoefficientImages()[k]->GetSpacing());
+        upsampler->SetOutputOrigin(
+            newTransform->GetCoefficientImages()[k]->GetOrigin());
+        upsampler->SetOutputDirection(image->GetDirection());
+        using DecompositionType =
+            itk::BSplineDecompositionImageFilter<ParametersImageType, ParametersImageType>;
+        typename DecompositionType::Pointer decomposition = DecompositionType::New();
+        decomposition->SetSplineOrder(splineOrder);
+        decomposition->SetInput(upsampler->GetOutput());
+        decomposition->Update();
+        typename ParametersImageType::Pointer newCoefficients = decomposition->GetOutput();
+        // copy the coefficients into the parameter array
+        using Iterator = itk::ImageRegionIterator<ParametersImageType>;
+        Iterator it(newCoefficients,
+                    newTransform->GetCoefficientImages()[k]->GetLargestPossibleRegion());
+        while (!it.IsAtEnd())
+        {
+            parameters[counter++] = it.Get();
+            ++it;
+        }
+    }
+    newTransform->SetParameters(parameters);
+}*/
+
+void LinearToBSplineTransform(
+    ImagePointer image,
+    TransformPointer newTransform,
+    typename itk::Transform<double, Dim, Dim>::Pointer oldTransform,
+    unsigned int numberOfGridNodes)
+{
+    typedef typename TransformType::ParametersType ParametersType;
+    ParametersType parameters(newTransform->GetNumberOfParameters());
+    parameters.Fill(0.0);
+
+    DisplacementFieldImagePointer disp =
+        TransformToDisplacementField<itk::Transform<double, Dim, Dim> >(oldTransform, newTransform->GetCoefficientImages()[0]);//newTransform->GetCoefficientImages()[0]
+
+    //using ImageAdaptorType = itk::VectorImageToImageAdaptor<double, Dim>;
+    using ImageAdaptorType = itk::VectorIndexSelectionCastImageFilter<DisplacementFieldImageType, ImageType>;
+    using ImageAdaptorPointer = typename ImageAdaptorType::Pointer;
+
+    unsigned int counter = 0;
+    for (unsigned int k = 0; k < ImageDimension; k++)
+    {
+        using ParametersImageType = typename TransformType::ImageType;
+        using ResamplerType = itk::ResampleImageFilter<ParametersImageType, ParametersImageType>;
+        typename ResamplerType::Pointer upsampler = ResamplerType::New();
+        using FunctionType = itk::BSplineResampleImageFunction<ParametersImageType, double>;
+        typename FunctionType::Pointer function = FunctionType::New();
+        using IdentityTransformType = itk::IdentityTransform<double, ImageDimension>;
+        typename IdentityTransformType::Pointer identity = IdentityTransformType::New();
+        
+        ImageAdaptorPointer adaptor = ImageAdaptorType::New();
+        //adaptor->SetExtractComponentIndex(k);
+        adaptor->SetIndex(k);
+        adaptor->SetInput(disp);
 
         upsampler->SetInput(adaptor->GetOutput());
         upsampler->SetInterpolator(function);
@@ -895,6 +962,134 @@ size_t ImagePixelCount(typename ImageType::Pointer image)
 
 #include <chrono>
 
+//
+// Linear
+//
+
+template <typename LinearTransformType>
+void mcalpha_linear_register_func(typename ImageType::Pointer fixedImage, typename ImageType::Pointer movingImage, typename LinearTransformType::Pointer& transformForward, BSplineRegParam param, ImagePointer fixedMask, ImagePointer movingMask, const DerivativeType& parameterScaling, bool verbose=false)
+{
+    typedef itk::IPT<double, ImageDimension> IPT;
+
+    using DistType = MCAlphaCutPointToSetDistance<ImageType, unsigned short>;
+    using DistPointer = typename DistType::Pointer;
+
+    DistPointer distStructRefImage = DistType::New();
+    DistPointer distStructFloImage = DistType::New();
+
+    distStructRefImage->SetSampleCount(param.alphaLevels);
+    distStructRefImage->SetImage(fixedImage);
+    distStructRefImage->SetMaxDistance(0);
+    distStructRefImage->SetApproximationThreshold(20.0);
+    distStructRefImage->SetApproximationFraction(0.2);
+
+    distStructFloImage->SetSampleCount(param.alphaLevels);
+    distStructFloImage->SetImage(movingImage);
+    distStructFloImage->SetMaxDistance(0);
+    distStructFloImage->SetApproximationThreshold(20.0);
+    distStructFloImage->SetApproximationFraction(0.2);
+
+    distStructRefImage->Initialize();
+    distStructFloImage->Initialize();
+
+    using RegistrationType = AlphaLinearRegistration<ImageType, DistType, LinearTransformType>;
+    using RegistrationPointer = typename RegistrationType::Pointer;
+
+    RegistrationPointer reg = RegistrationType::New();
+
+    using PointSamplerType = PointSamplerBase<ImageType, itk::Image<bool, Dim>, ImageType>;
+    using PointSamplerPointer = typename PointSamplerType::Pointer;
+    
+    PointSamplerPointer sampler1; 
+    PointSamplerPointer sampler2;
+    constexpr double SIGMA = 0.5; // THis should be tunable
+    
+    if(param.samplingMode == "gw" || param.samplingMode == "gw50")
+    {
+        sampler1 = CreateHybridPointSampler(fixedImage, fixedMask, 0.5, false, SIGMA, param.seed);
+        sampler2 = CreateHybridPointSampler(movingImage, movingMask, 0.5, false, SIGMA, param.seed);
+    } else if(param.samplingMode == "gw25")
+    {
+        sampler1 = CreateHybridPointSampler(fixedImage, fixedMask, 0.25, false, SIGMA, param.seed);
+        sampler2 = CreateHybridPointSampler(movingImage, movingMask, 0.25, false, SIGMA, param.seed);
+    } else if(param.samplingMode == "gw75")
+    {
+        sampler1 = CreateHybridPointSampler(fixedImage, fixedMask, 0.75, false, SIGMA, param.seed);
+        sampler2 = CreateHybridPointSampler(movingImage, movingMask, 0.75, false, SIGMA, param.seed);
+    } else if(param.samplingMode == "quasi")
+    {
+        sampler1 = CreateQuasiRandomPointSampler(fixedImage, fixedMask, param.seed);
+        sampler2 = CreateQuasiRandomPointSampler(movingImage, movingMask, param.seed);
+    } else if(param.samplingMode == "uniform")
+    {
+        sampler1 = CreateUniformPointSampler(fixedImage, fixedMask, param.seed);
+        sampler2 = CreateUniformPointSampler(movingImage, movingMask, param.seed);
+    }
+
+    reg->SetPointSamplerRefImage(sampler1);
+    reg->SetPointSamplerFloImage(sampler2);
+
+    reg->SetDistDataStructRefImage(distStructRefImage);
+    reg->SetDistDataStructFloImage(distStructFloImage);
+
+    constexpr unsigned int iterations = 1000U;
+    constexpr double learningRate = 0.8;
+    constexpr double momentum = 0.1;
+
+    unsigned int sampleCountRefToFlo = 128;
+    unsigned int sampleCountFloToRef = 128;
+
+    reg->SetTransformRefToFlo(transformForward);
+    reg->SetParameterScaling(parameterScaling);
+
+    itk::TimeProbesCollectorBase chronometer;
+    itk::MemoryProbesCollectorBase memorymeter;
+
+    for (int q = 0; q < param.innerParams.size(); ++q) {
+        double lr1 = param.innerParams[q].learningRate;
+        unsigned int iterations = param.innerParams[q].iterations;
+
+        sampleCountRefToFlo = ImagePixelCount(fixedImage) * param.innerParams[q].samplingFraction;
+        sampleCountFloToRef = ImagePixelCount(movingImage) * param.innerParams[q].samplingFraction;
+
+        reg->SetSampleCountRefToFlo(sampleCountRefToFlo);
+        reg->SetSampleCountFloToRef(sampleCountFloToRef);
+        reg->SetIterations(iterations);
+        reg->SetLearningRate(lr1);
+
+        if (verbose) {
+            reg->SetPrintInterval(1U);
+        }
+        reg->SetTransformRefToFlo(transformForward);
+        reg->SetParameterScaling(parameterScaling);
+        //reg->SetTransformFloToRef(transformInverse);
+        std::cerr << "Starting initialization of alphaLinearRegistration" << std::endl;
+
+        reg->Initialize();
+
+        std::cerr << "Initialization of alphaLinearRegistration done" << std::endl;
+
+        std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+
+        reg->Run();
+
+        std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+        if(verbose) {
+            std::cout << "Time elapsed: " << std::chrono::duration_cast<std::chrono::seconds>(end - begin).count() << "[s]" << std::endl;
+        }
+
+        transformForward = reg->GetTransformRefToFlo();
+        //transformInverse = reg->GetTransformFloToRef();
+    }
+
+    //chronometer.Report(std::cout);
+    //memorymeter.Report(std::cout);
+}
+
+//
+// Deformable
+//
+
 void mcalpha_register_func(typename ImageType::Pointer fixedImage, typename ImageType::Pointer movingImage, TransformPointer& transformForward, TransformPointer& transformInverse, BSplineRegParam param, ImagePointer fixedMask, ImagePointer movingMask, bool verbose=false, CallbackType* callback=nullptr)
 {
     typedef itk::IPT<double, ImageDimension> IPT;
@@ -1184,7 +1379,8 @@ void register_func_baseline(typename ImageType::Pointer fixedImage, typename Ima
 void bspline_register(
     typename ImageType::Pointer fixedImage,
     typename ImageType::Pointer movingImage,
-    BSplineRegParamOuter param,
+    BSplineRegParamOuter affineParam,
+    BSplineRegParamOuter bsplineParam,
     ImagePointer fixedMask,
     ImagePointer movingMask,
     TransformPointer& transformForwardOut,
@@ -1196,11 +1392,76 @@ void bspline_register(
 
     // Do affine registration
 
-    //mcalpha_linear_register_func(fixedImagePrime, movingImagePrime, linearTransformForward, paramSet, fixedMaskPrime, movingMaskPrime, paramSet.verbose, callback);       
+    // Setup transformation
+    using CompositeTransformType = itk::CompositeTransform<double, Dim>;
+    using CompositeTransformPointer = typename CompositeTransformType::Pointer;
+    using AffineTransformType = itk::AffineTransform<double, Dim>;
+    using AffineTransformPointer = typename AffineTransformType::Pointer;
+    using TranslationTransformType = itk::TranslationTransform<double, Dim>;
+    using TranslationTransformPointer = typename TranslationTransformType::Pointer;
 
-    // Do deformable registration
-    for(size_t i = 0; i < param.paramSets.size(); ++i) {
-        auto paramSet = param.paramSets[i];
+    CompositeTransformPointer compositeTransformation = CompositeTransformType::New();
+    AffineTransformPointer affineTransformation = AffineTransformType::New();
+    TranslationTransformPointer offsetTransformation1 = TranslationTransformType::New();
+    TranslationTransformPointer offsetTransformation2 = TranslationTransformType::New();
+    
+    using ParametersType = typename AffineTransformType::ParametersType;
+    ParametersType offset1Param(offsetTransformation1->GetNumberOfParameters());
+    ParametersType offset2Param(offsetTransformation2->GetNumberOfParameters());
+    ParametersType affineTransformationParam(affineTransformation->GetNumberOfParameters());
+    auto reg1 = fixedImage->GetLargestPossibleRegion();
+    auto reg2 = movingImage->GetLargestPossibleRegion();
+
+    double diag1 = 0.0;
+    double diag2 = 0.0;
+
+    for (unsigned int i = 0; i < offsetTransformation1->GetNumberOfParameters(); ++i)
+    {
+        const double diag1_i = fixedImage->GetSpacing()[i] * reg1.GetSize()[i];
+        const double diag2_i = movingImage->GetSpacing()[i] * reg2.GetSize()[i];
+        diag1 += diag1_i * diag1_i;
+        diag2 += diag2_i * diag2_i;
+
+        auto center1 = -fixedImage->GetSpacing()[i] * ((reg1.GetSize()[i] / 2.0) + reg1.GetIndex()[i]);
+        auto center2 = movingImage->GetSpacing()[i] * ((reg2.GetSize()[i] / 2.0) + reg2.GetIndex()[i]);
+        offset1Param[i] = center1;
+        offset2Param[i] = center2;
+    }
+
+    double diag = 0.5 * (sqrt(diag1) + sqrt(diag2));
+
+    offsetTransformation1->SetParameters(offset1Param);
+    offsetTransformation2->SetParameters(offset2Param);
+
+    DerivativeType parameterScaling(affineTransformation->GetNumberOfParameters());
+    parameterScaling.Fill(1.0);
+
+    affineTransformationParam.Fill(0.0);
+    for (unsigned int i = 0; i < Dim; ++i)
+    {
+        affineTransformationParam[i*Dim+i] = 1.0;
+        for (unsigned int j = 0; j < Dim; ++j)
+        {
+            parameterScaling[i*Dim+j] = 1.0 / diag;
+        }
+    }
+    affineTransformation->SetParameters(affineTransformationParam);
+
+    compositeTransformation->AppendTransform(offsetTransformation2.GetPointer());
+    compositeTransformation->AppendTransform(affineTransformation.GetPointer());
+    compositeTransformation->AppendTransform(offsetTransformation1.GetPointer());
+
+    compositeTransformation->SetNthTransformToOptimize(0, false);
+    compositeTransformation->SetNthTransformToOptimize(1, true);
+    compositeTransformation->SetNthTransformToOptimize(2, false);   
+
+    //auto inv = compositeTransformation->GetInverseTransform();
+    //std::cout << inv << std::endl;
+
+    std::cerr << "Created affine transformation" << std::endl;
+
+    for(size_t i = 0; i < affineParam.paramSets.size(); ++i) {
+        auto paramSet = affineParam.paramSets[i];
 
         ImagePointer fixedImagePrime;
         ImagePointer movingImagePrime;
@@ -1211,7 +1472,45 @@ void bspline_register(
             fixedImagePrime = IPT::MedianFilterImage(fixedImage, paramSet.smoothingSigma);
             movingImagePrime = IPT::MedianFilterImage(movingImage, paramSet.smoothingSigma);
         } else {
-            assert (false);
+            std::cerr << "Illegal smoothing mode: " << paramSet.smoothingMode << std::endl;
+            assert(false);
+        }
+        ImagePointer fixedMaskPrime = fixedMask;
+        ImagePointer movingMaskPrime = movingMask;
+        if(paramSet.downsamplingFactor != 1) {
+            fixedImagePrime = IPT::SubsampleImage(fixedImagePrime, paramSet.downsamplingFactor);
+            movingImagePrime = IPT::SubsampleImage(movingImagePrime, paramSet.downsamplingFactor);
+            fixedMaskPrime = IPT::SubsampleImage(fixedMaskPrime, paramSet.downsamplingFactor);
+            movingMaskPrime = IPT::SubsampleImage(movingMaskPrime, paramSet.downsamplingFactor);
+        }
+        if(paramSet.gradientMagnitude) {
+            fixedImagePrime = GradientMagnitudeImage(fixedImagePrime, 0.0);
+            movingImagePrime = GradientMagnitudeImage(movingImagePrime, 0.0);
+        }
+        fixedImagePrime = IPT::NormalizeImage(fixedImagePrime, IPT::IntensityMinMax(fixedImagePrime, paramSet.normalization));
+        movingImagePrime = IPT::NormalizeImage(movingImagePrime, IPT::IntensityMinMax(movingImagePrime, paramSet.normalization));
+
+        std::cerr << "Starting affine registration " << i << std::endl;
+        mcalpha_linear_register_func<CompositeTransformType>(fixedImagePrime, movingImagePrime, compositeTransformation, paramSet, fixedMaskPrime, movingMaskPrime, parameterScaling, paramSet.verbose);       
+    }
+
+    std::cerr << "Completed affine registration" << std::endl;
+
+    // Do deformable registration
+    for(size_t i = 0; i < bsplineParam.paramSets.size(); ++i) {
+        auto paramSet = bsplineParam.paramSets[i];
+
+        ImagePointer fixedImagePrime;
+        ImagePointer movingImagePrime;
+        if (paramSet.smoothingMode == "gaussian") {
+            fixedImagePrime = IPT::SmoothImage(fixedImage, paramSet.smoothingSigma);
+            movingImagePrime = IPT::SmoothImage(movingImage, paramSet.smoothingSigma);
+        } else if (paramSet.smoothingMode == "median") {
+            fixedImagePrime = IPT::MedianFilterImage(fixedImage, paramSet.smoothingSigma);
+            movingImagePrime = IPT::MedianFilterImage(movingImage, paramSet.smoothingSigma);
+        } else {
+            std::cerr << "Illegal smoothing mode: " << paramSet.smoothingMode << std::endl;
+            assert(false);
         }
         ImagePointer fixedMaskPrime = fixedMask;
         ImagePointer movingMaskPrime = movingMask;
@@ -1229,8 +1528,17 @@ void bspline_register(
         movingImagePrime = IPT::NormalizeImage(movingImagePrime, IPT::IntensityMinMax(movingImagePrime, paramSet.normalization));
 
         if(i == 0) {
-            transformForward = CreateBSplineTransform(fixedImagePrime, paramSet.innerParams[0].controlPoints);
-            transformInverse = CreateBSplineTransform(movingImagePrime, paramSet.innerParams[0].controlPoints);
+            //transformForward = CreateBSplineTransform(fixedImagePrime, paramSet.innerParams[0].controlPoints);
+            //transformInverse = CreateBSplineTransform(movingImagePrime, paramSet.innerParams[0].controlPoints);
+            TransformPointer tforNew = CreateBSplineTransform(fixedImagePrime, paramSet.innerParams[0].controlPoints);
+            TransformPointer tinvNew = CreateBSplineTransform(movingImagePrime, paramSet.innerParams[0].controlPoints);
+            LinearToBSplineTransform(fixedImagePrime, tforNew, compositeTransformation.GetPointer(), paramSet.innerParams[0].controlPoints);
+            LinearToBSplineTransform(movingImagePrime, tinvNew, compositeTransformation->GetInverseTransform().GetPointer(), paramSet.innerParams[0].controlPoints);
+            //UpsampleBSplineTransform(fixedImagePrime, tforNew, transformForward, paramSet.innerParams[0].controlPoints);
+            //UpsampleBSplineTransform(movingImagePrime, tinvNew, transformInverse, paramSet.innerParams[0].controlPoints);
+            transformForward = tforNew;
+            transformInverse = tinvNew;
+            //break;         
         } else {
             TransformPointer tforNew = CreateBSplineTransform(fixedImagePrime, paramSet.innerParams[0].controlPoints);
             TransformPointer tinvNew = CreateBSplineTransform(movingImagePrime, paramSet.innerParams[0].controlPoints);

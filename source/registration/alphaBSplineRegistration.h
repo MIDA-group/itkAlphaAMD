@@ -407,12 +407,14 @@ private:
     double w = pointSample.m_Weight;
     double valueW;
 
-    if(!flag) {
+    if(!flag || !isInside) {
+
         valueW = 0.0;
-        if(!isInside)
-        {
-            return;
-        }
+        //if(!isInside)
+        //{
+        //    return;
+        //}
+        return;
     } else {
         valueW = pointSample.m_Weight;
     }
