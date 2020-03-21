@@ -69,7 +69,7 @@ void readKeyValuePairForProgramConfig(int argc, char** argv, int startIndex, Pro
     } else if (key == "-seed") {
         cfg.seed = atoi(value.c_str());
     } else if (key == "-workers") {
-        cfg.seed = atoi(value.c_str());
+        cfg.workers = atoi(value.c_str());
     } else if (key == "-out_path_affine_forward") {
         cfg.outPathAffineForward = value;
     } else if (key == "-out_path_affine_reverse") {
