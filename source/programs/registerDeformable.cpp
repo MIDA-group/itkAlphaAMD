@@ -6,7 +6,7 @@
 #include "itkLabelOverlapMeasuresImageFilter.h"
 #include "itkHausdorffDistanceImageFilter.h"
 #include "itkMersenneTwisterRandomVariateGenerator.h"
-#include "../bsplineFunctions.h"
+#include "../alphaAMDDeformableRegistration.h"
 #include "itkNearestNeighborInterpolateImageFunction.h"
 #include "itkBSplineInterpolateImageFunction.h"
 
@@ -37,6 +37,8 @@ struct ProgramConfig {
     std::string floImagePath;
     std::string refMaskPath;
     std::string floMaskPath;
+    std::string outPathAffineForward;
+    std::string outPathAffineReverse;
     std::string outPathForward;
     std::string outPathReverse;
 };
@@ -47,32 +49,45 @@ struct ProgramConfig {
  */
 
 void readKeyValuePairForProgramConfig(int argc, char** argv, int startIndex, ProgramConfig& cfg) {
-    //if (startIndex + 1 < argc) {
     assert(startIndex + 1 < argc);
 
-        std::string key = argv[startIndex];
-        std::string value = argv[startIndex + 1];
+    std::string key = argv[startIndex];
+    std::string value = argv[startIndex + 1];
 
-        if (key == "-refmask") {
-            cfg.refMaskPath = value;
-        } else if (key == "-flomask") {
-            cfg.floMaskPath = value;
-        } else if (key == "-seed") {
-            cfg.seed = atoi(value.c_str());
-        } else if (key == "-workers") {
-            cfg.seed = atoi(value.c_str());
-        }
-    //}
+    if (key == "-ref") {
+        cfg.refImagePath = value;
+    } else if (key == "-flo") {
+        cfg.floImagePath = value;
+    } else if (key == "-affine_cfg") {
+        cfg.affineConfigPath = value;
+    } else if (key == "-deform_cfg") {
+        cfg.configPath = value;
+    } else if (key == "-ref_mask") {
+        cfg.refMaskPath = value;
+    } else if (key == "-flo_mask") {
+        cfg.floMaskPath = value;
+    } else if (key == "-seed") {
+        cfg.seed = atoi(value.c_str());
+    } else if (key == "-workers") {
+        cfg.seed = atoi(value.c_str());
+    } else if (key == "-out_path_affine_forward") {
+        cfg.outPathAffineForward = value;
+    } else if (key == "-out_path_affine_reverse") {
+        cfg.outPathAffineReverse = value;
+    } else if (key == "-out_path_deform_forward") {
+        cfg.outPathForward = value;
+    } else if (key == "-out_path_deform_reverse") {
+        cfg.outPathReverse = value;
+    }
 }
+
 ProgramConfig readProgramConfigFromArgs(int argc, char** argv) {
     ProgramConfig res;
 
-    res.affineConfigPath = argv[2];
-    res.configPath = argv[3];
-    res.refImagePath = argv[4];
-    res.floImagePath = argv[5];
-    res.outPathForward = argv[6];
-    res.outPathReverse = argv[7];
+    //res.affineConfigPath = argv[2];
+    //res.configPath = argv[3];
+    //res.refImagePath = argv[4];
+    //res.floImagePath = argv[5];
 
     // Defaults for optional parameters
     res.seed = 1337;
@@ -80,7 +95,7 @@ ProgramConfig readProgramConfigFromArgs(int argc, char** argv) {
     res.refMaskPath = "";
     res.floMaskPath = "";
     
-    for (int i = 8; i+1 < argc; ++i) {
+    for (int i = 2; i+1 < argc; ++i) {
         readKeyValuePairForProgramConfig(argc, argv, i, res);
     }
 
@@ -101,11 +116,12 @@ class RegisterDeformableProgram
 
     typedef BSplines<ImageDimension> BSplineFunc;
 
-    static void Run(
+    static bool Run(
         ProgramConfig cfg,
         BSplineRegParamOuter& affineParams,
         BSplineRegParamOuter& params)
     {
+        bool success = true;
 
         BSplineFunc bsf;
 
@@ -121,6 +137,8 @@ class RegisterDeformableProgram
             std::cerr << "Error loading reference image: " << cfg.refImagePath.c_str() << std::endl;
 	        std::cerr << "ExceptionObject caught !" << std::endl;
 		    std::cerr << err << std::endl;
+            success = false;
+            return success;
 		}
             
         ImagePointer floImage;
@@ -132,6 +150,8 @@ class RegisterDeformableProgram
             std::cerr << "Error loading floating image: " << cfg.floImagePath.c_str() << std::endl;
 		    std::cerr << "ExceptionObject caught !" << std::endl;
 		    std::cerr << err << std::endl;
+            success = false;
+            return success;
 	    }
 
         ImagePointer refImageMask;
@@ -144,6 +164,8 @@ class RegisterDeformableProgram
                 std::cerr << "Error loading reference mask: " << cfg.refMaskPath.c_str() << std::endl;
 	            std::cerr << "ExceptionObject caught !" << std::endl;
 	            std::cerr << err << std::endl;
+                success = false;
+                return success;
 	        }
         }
         ImagePointer floImageMask;
@@ -156,9 +178,15 @@ class RegisterDeformableProgram
                 std::cerr << "Error loading reference mask: " << cfg.floMaskPath.c_str() << std::endl;
 	            std::cerr << "ExceptionObject caught !" << std::endl;
 	            std::cerr << err << std::endl;
+                success = false;
+                return success;
 	        }
         }
 
+        using CompositeTranformType = itk::CompositeTransform<double, ImageDimension>;
+        using CompositeTranformPointer = typename CompositeTranformType::Pointer;
+
+        CompositeTranformPointer affineTransform;
         TransformPointer forwardTransform;
         TransformPointer inverseTransform;
 
@@ -166,13 +194,14 @@ class RegisterDeformableProgram
 
         std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
 
-        bsf.bspline_register(
+        bsf.register_deformable(
             refImage,
             floImage,
             affineParams,
             params,
             refImageMask,
             floImageMask,
+            affineTransform,
             forwardTransform,
             inverseTransform,
             nullptr);
@@ -186,10 +215,40 @@ class RegisterDeformableProgram
 
         if(cfg.outPathForward.length() > 260) {
             std::cerr << "Error. Too long forward transform path." << std::endl;
-            exit(-1);
+            success = false;
+            return success;
         }
 
-        std::cerr << forwardTransform << std::endl;
+        if(cfg.outPathAffineForward != "") {
+            try {
+                IPT::SaveTransformFile(cfg.outPathAffineForward.c_str(), affineTransform.GetPointer());
+            }
+            catch (itk::ExceptionObject & err)
+            {
+                std::cerr << "Error saving forward affine transformation file." << std::endl;
+	            std::cerr << err << std::endl;
+                success = false;
+	    	}
+        }
+
+        if(cfg.outPathAffineReverse != "") {
+            try {
+                auto inverse = affineTransform->GetInverseTransform();
+                if (inverse) {
+                    IPT::SaveTransformFile(cfg.outPathAffineReverse.c_str(), affineTransform->GetInverseTransform().GetPointer());
+                } else {
+                    std::cerr << "Error saving reverse affine transformation file. The transformation is not invertible." << std::endl;
+                    success = false;
+                }
+            }
+            catch (itk::ExceptionObject & err)
+            {
+                std::cerr << "Error saving reverse affine transformation file." << std::endl;
+	            std::cerr << err << std::endl;
+                success = false;
+	    	}
+        }
+
         try {
             IPT::SaveTransformFile(cfg.outPathForward.c_str(), forwardTransform.GetPointer());
         }
@@ -197,6 +256,7 @@ class RegisterDeformableProgram
         {
             std::cerr << "Error saving forward transformation file." << std::endl;
 	        std::cerr << err << std::endl;
+            success = false;
 		}
 
         try {
@@ -206,9 +266,12 @@ class RegisterDeformableProgram
         {
             std::cerr << "Error saving reverse transformation file." << std::endl;
 	        std::cerr << err << std::endl;
+            success = false;
 		}
 
         std::cout << "(Registration) Time elapsed: " << elapsed << "[s]" << std::endl;
+        
+        return success;
     }
 
     static int MainFunc(int argc, char** argv) {
@@ -233,7 +296,7 @@ class RegisterDeformableProgram
         itk::MultiThreaderBase::SetGlobalMaximumNumberOfThreads(config.workers);
         itk::MultiThreaderBase::SetGlobalDefaultNumberOfThreads(config.workers);
 
-        Run(config, affineParams, params);
+        bool success = Run(config, affineParams, params);
 
         chronometer.Stop("Registration");
         memorymeter.Stop("Registration");
@@ -241,7 +304,7 @@ class RegisterDeformableProgram
         //chronometer.Report(std::cout);
         //memorymeter.Report(std::cout);
 
-        return 0;
+        return (success ? 0 : -1);
     }
 };
 
