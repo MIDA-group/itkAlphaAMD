@@ -11,6 +11,7 @@
 #include "itkMersenneTwisterRandomVariateGenerator.h"
 #include "itkNearestNeighborInterpolateImageFunction.h"
 #include "itkBSplineInterpolateImageFunction.h"
+#include "itkIdentityTransform.h"
 
 #include "itkTimeProbesCollectorBase.h"
 #include "itkMemoryProbesCollectorBase.h"
@@ -44,6 +45,13 @@ void printMetrics(TStream& strm, PerformanceMetrics m, std::string name, bool li
 template <typename TStream>
 void printMetricsCSV(TStream& strm, PerformanceMetrics m, bool linebreak=true) {
     strm << m.totalOverlap << ", " << m.meanTotalOverlap << ", " << m.absDiff;
+    if(linebreak)
+        strm << std::endl;
+}
+
+template <typename TStream>
+void printPairOfMetricsCSV(TStream& strm, PerformanceMetrics before, PerformanceMetrics after, bool linebreak=true) {
+    strm << before.totalOverlap << ", " << before.meanTotalOverlap << ", " << before.absDiff << after.totalOverlap << ", " << after.meanTotalOverlap << ", " << after.absDiff;
     if(linebreak)
         strm << std::endl;
 }
@@ -248,15 +256,23 @@ public:
 
             using TransformBaseType = itk::Transform<double, ImageDimension, ImageDimension>;
             using TransformBasePointer = typename TransformBaseType::Pointer;
+            using IdentityTransformType = itk::IdentityTransform<double, ImageDimension>;
+            using IdentityTransformPointer = typename IdentityTransformType::Pointer;
 
+            IdentityTransformPointer identityTransform = IdentityTransformType::New();
             TransformBasePointer transformForward = IPT::LoadTransformFile(transformPath.c_str());
 
-            PerformanceMetrics metrics;
-            DoEvaluateRegistration<TransformBaseType, ImageType, LabelImageType>(
-                refImage, floImage, refImageLabel, floImageLabel, transformForward, metrics
+            PerformanceMetrics beforeMetrics;
+            DoEvaluateRegistration<IdentityTransformType, ImageType, LabelImageType>(
+                refImage, floImage, refImageLabel, floImageLabel, identityTransform, beforeMetrics
             );
 
-            printMetricsCSV(std::cout, metrics, true);
+            PerformanceMetrics afterMetrics;
+            DoEvaluateRegistration<TransformBaseType, ImageType, LabelImageType>(
+                refImage, floImage, refImageLabel, floImageLabel, transformForward, afterMetrics
+            );
+
+            printPairOfMetricsCSV(std::cout, beforeMetrics, afterMetrics, true);
     }
 
     static void MainFunc(int argc, char** argv)
