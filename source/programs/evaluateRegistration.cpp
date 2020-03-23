@@ -193,7 +193,7 @@ public:
     typedef itk::Image<unsigned short, ImageDimension> LabelImageType;
     typedef typename LabelImageType::Pointer LabelImagePointer;
     
-    static PerformanceMetrics Evaluate(
+    static void Evaluate(
         std::string refImagePath,
         std::string floImagePath,
         std::string refLabelPath, 
