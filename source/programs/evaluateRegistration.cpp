@@ -51,7 +51,7 @@ void printMetricsCSV(TStream& strm, PerformanceMetrics m, bool linebreak=true) {
 
 template <typename TStream>
 void printPairOfMetricsCSV(TStream& strm, PerformanceMetrics before, PerformanceMetrics after, bool linebreak=true) {
-    strm << before.totalOverlap << ", " << before.meanTotalOverlap << ", " << before.absDiff << after.totalOverlap << ", " << after.meanTotalOverlap << ", " << after.absDiff;
+    strm << before.totalOverlap << ", " << before.meanTotalOverlap << ", " << before.absDiff << ", " << after.totalOverlap << ", " << after.meanTotalOverlap << ", " << after.absDiff;
     if(linebreak)
         strm << std::endl;
 }
