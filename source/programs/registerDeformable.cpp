@@ -1,5 +1,7 @@
 
 #include <thread>
+#include <fstream>
+#include <iostream>
 
 #include "../common/itkImageProcessingTools.h"
 
@@ -33,6 +35,7 @@ struct ProgramConfig {
     std::string configPath;
     unsigned int seed;
     unsigned int workers;
+    bool rerun;
     std::string refImagePath;
     std::string floImagePath;
     std::string refMaskPath;
@@ -70,6 +73,8 @@ void readKeyValuePairForProgramConfig(int argc, char** argv, int startIndex, Pro
         cfg.seed = atoi(value.c_str());
     } else if (key == "-workers") {
         cfg.workers = atoi(value.c_str());
+    } else if (key == "-rerun") {
+        cfg.rerun = atoi(value.c_str()) != 0;
     } else if (key == "-out_path_affine_forward") {
         cfg.outPathAffineForward = value;
     } else if (key == "-out_path_affine_reverse") {
@@ -92,6 +97,7 @@ ProgramConfig readProgramConfigFromArgs(int argc, char** argv) {
     // Defaults for optional parameters
     res.seed = 1337;
     res.workers = 6;
+    res.rerun = true;
     res.refMaskPath = "";
     res.floMaskPath = "";
     
@@ -100,6 +106,19 @@ ProgramConfig readProgramConfigFromArgs(int argc, char** argv) {
     }
 
     return res;
+}
+
+bool checkFile(std::string path)
+{
+    std::ifstream file(path.c_str());
+    if (!file)
+    {
+        return false;
+    }
+    else
+    {
+        return true;
+    }
 }
 
 template <unsigned int ImageDimension>
@@ -122,6 +141,33 @@ class RegisterDeformableProgram
         BSplineRegParamOuter& params)
     {
         bool success = true;
+
+        if (!cfg.rerun)
+        {
+            bool allfine = true;
+
+            if (!allfine || (cfg.outPathAffineForward != "" && !checkFile(cfg.outPathAffineForward)))
+            {
+                allfine = false;
+            }
+            if (!allfine || (cfg.outPathAffineReverse != "" && !checkFile(cfg.outPathAffineReverse)))
+            {
+                allfine = false;
+            }
+            if (!allfine || (cfg.outPathForward != "" && !checkFile(cfg.outPathForward)))
+            {
+                allfine = false;
+            }
+            if (!allfine || (cfg.outPathReverse != "" && !checkFile(cfg.outPathReverse)))
+            {
+                allfine = false;
+            }
+
+            if (allfine)
+            {
+                return success;
+            }
+        }
 
         BSplineFunc bsf;
 
