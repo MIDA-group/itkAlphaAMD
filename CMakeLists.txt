@@ -47,6 +47,8 @@ add_executable(TestSuite source/tests/testSuite.cpp)
 
 add_executable(RegisterDeformable source/programs/registerDeformable.cpp)
 
+add_executable(EvaluateRegistration source/programs/evaluateRegistration.cpp)
+
 target_link_libraries(ACRandomTransforms ${ITK_LIBRARIES})
 
 target_link_libraries(ACRegister ${ITK_LIBRARIES})
@@ -76,3 +78,5 @@ target_link_libraries(TestMCDS ${ITK_LIBRARIES})
 target_link_libraries(TestSuite ${ITK_LIBRARIES})
 
 target_link_libraries(RegisterDeformable ${ITK_LIBRARIES})
+
+target_link_libraries(EvaluateRegistration ${ITK_LIBRARIES})
