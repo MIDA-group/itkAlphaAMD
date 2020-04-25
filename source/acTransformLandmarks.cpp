@@ -25,9 +25,6 @@ static void DoTransform(TransformProgramParam &param)
 	typedef itk::Image<unsigned short, Dim> LabelImageType;
 	typedef typename LabelImageType::Pointer LabelImagePointer;
 
-	itk::MultiThreader::SetGlobalMaximumNumberOfThreads(1);
-	itk::MultiThreader::SetGlobalDefaultNumberOfThreads(1);
-
 	std::cout << "Loading transform" << std::endl;
 
 	typename itk::Transform<double, Dim, Dim>::Pointer transform = IPT::LoadTransformFile(param.transformPath.c_str());
