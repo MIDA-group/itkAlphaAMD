@@ -89,6 +89,8 @@ struct BSplineRegParam
     double learningRate;
     double momentum;
     double lambdaFactor;
+    double dmax;
+    double distancePower;
     unsigned long long seed;
     bool enableCallbacks;
     bool verbose;
@@ -150,6 +152,10 @@ BSplineRegParamOuter readConfig(std::string path) {
         readJSONKey(m_i, "momentum", &paramSet.momentum);
         paramSet.lambdaFactor = 0.01;
         readJSONKey(m_i, "lambdaFactor", &paramSet.lambdaFactor);
+        paramSet.dmax = 1.0;
+        readJSONKey(m_i, "dmax", &paramSet.dmax);
+        paramSet.distancePower = 1.0;
+        readJSONKey(m_i, "distancePower", &paramSet.dmax);
         paramSet.samplingMode = "quasi";
         readJSONKey(m_i, "samplingMode", &paramSet.samplingMode);
         paramSet.seed = 1337;
@@ -458,6 +464,21 @@ size_t ImagePixelCount(typename ImageType::Pointer image)
     return cnt;
 }
 
+double ImageDiagonal(typename ImageType::Pointer image)
+{
+    auto size = image->GetLargestPossibleRegion().GetSize();
+    auto spacing = image->GetSpacing();
+
+    double acc = 0.0;
+    for (unsigned int i = 0; i < ImageType::ImageDimension; ++i)
+    {
+        double d_i = size[i] * spacing[i];
+        acc += d_i*d_i;
+    }
+
+    return sqrt(acc);
+}
+
 //
 // Linear
 // Linear monte carlo alpha registration
@@ -471,20 +492,30 @@ void mcalpha_linear_register_func(typename ImageType::Pointer fixedImage, typena
     using DistType = MCAlphaCutPointToSetDistance<ImageType, unsigned short>;
     using DistPointer = typename DistType::Pointer;
 
+    double dmaxRefImage = 0.0;
+    double dmaxFloImage = 0.0;
+    if(param.dmax > 0)
+    {
+        dmaxRefImage = ImageDiagonal(fixedImage) * param.dmax;
+        dmaxFloImage = ImageDiagonal(movingImage) * param.dmax;
+    }
+
     DistPointer distStructRefImage = DistType::New();
     DistPointer distStructFloImage = DistType::New();
 
     distStructRefImage->SetSampleCount(param.alphaLevels);
     distStructRefImage->SetImage(fixedImage);
-    distStructRefImage->SetMaxDistance(0);
+    distStructRefImage->SetMaxDistance(dmaxRefImage);
     distStructRefImage->SetApproximationThreshold(20.0);
     distStructRefImage->SetApproximationFraction(0.2);
+    distStructRefImage->SetDistancePower(param.distancePower);
 
     distStructFloImage->SetSampleCount(param.alphaLevels);
     distStructFloImage->SetImage(movingImage);
-    distStructFloImage->SetMaxDistance(0);
+    distStructFloImage->SetMaxDistance(dmaxFloImage);
     distStructFloImage->SetApproximationThreshold(20.0);
     distStructFloImage->SetApproximationFraction(0.2);
+    distStructFloImage->SetDistancePower(param.distancePower);
 
     distStructRefImage->Initialize();
     distStructFloImage->Initialize();
@@ -585,24 +616,34 @@ void mcalpha_linear_register_func(typename ImageType::Pointer fixedImage, typena
 void mcalpha_register_func(typename ImageType::Pointer fixedImage, typename ImageType::Pointer movingImage, TransformPointer& transformForward, TransformPointer& transformInverse, BSplineRegParam param, ImagePointer fixedMask, ImagePointer movingMask, bool verbose=false, CallbackType* callback=nullptr)
 {
     typedef itk::IPT<double, ImageDimension> IPT;
-
+    
     using DistType = MCAlphaCutPointToSetDistance<ImageType, unsigned short>;
     using DistPointer = typename DistType::Pointer;
+
+    double dmaxRefImage = 0.0;
+    double dmaxFloImage = 0.0;
+    if(param.dmax > 0)
+    {
+        dmaxRefImage = ImageDiagonal(fixedImage) * param.dmax;
+        dmaxFloImage = ImageDiagonal(movingImage) * param.dmax;
+    }
 
     DistPointer distStructRefImage = DistType::New();
     DistPointer distStructFloImage = DistType::New();
 
     distStructRefImage->SetSampleCount(param.alphaLevels);
     distStructRefImage->SetImage(fixedImage);
-    distStructRefImage->SetMaxDistance(0);
+    distStructRefImage->SetMaxDistance(dmaxRefImage);
     distStructRefImage->SetApproximationThreshold(20.0);
     distStructRefImage->SetApproximationFraction(0.2);
+    distStructRefImage->SetDistancePower(param.distancePower);
 
     distStructFloImage->SetSampleCount(param.alphaLevels);
     distStructFloImage->SetImage(movingImage);
-    distStructFloImage->SetMaxDistance(0);
+    distStructFloImage->SetMaxDistance(dmaxFloImage);
     distStructFloImage->SetApproximationThreshold(20.0);
     distStructFloImage->SetApproximationFraction(0.2);
+    distStructFloImage->SetDistancePower(param.distancePower);
 
     distStructRefImage->Initialize();
     distStructFloImage->Initialize();
@@ -817,8 +858,11 @@ void register_deformable(
             fixedImagePrime = GradientMagnitudeImage(fixedImagePrime, 0.0);
             movingImagePrime = GradientMagnitudeImage(movingImagePrime, 0.0);
         }
-        fixedImagePrime = IPT::NormalizeImage(fixedImagePrime, IPT::IntensityMinMax(fixedImagePrime, paramSet.normalization));
-        movingImagePrime = IPT::NormalizeImage(movingImagePrime, IPT::IntensityMinMax(movingImagePrime, paramSet.normalization));
+        if(paramSet.normalization >= 0.0)
+        {
+            fixedImagePrime = IPT::NormalizeImage(fixedImagePrime, IPT::IntensityMinMax(fixedImagePrime, paramSet.normalization));
+            movingImagePrime = IPT::NormalizeImage(movingImagePrime, IPT::IntensityMinMax(movingImagePrime, paramSet.normalization));
+        }
 
         std::cerr << "Starting affine registration " << i << std::endl;
         mcalpha_linear_register_func<CompositeTransformType>(fixedImagePrime, movingImagePrime, compositeTransformation, paramSet, fixedMaskPrime, movingMaskPrime, parameterScaling, paramSet.verbose);       
@@ -856,8 +900,11 @@ void register_deformable(
             fixedImagePrime = GradientMagnitudeImage(fixedImagePrime, 0.0);
             movingImagePrime = GradientMagnitudeImage(movingImagePrime, 0.0);
         }
-        fixedImagePrime = IPT::NormalizeImage(fixedImagePrime, IPT::IntensityMinMax(fixedImagePrime, paramSet.normalization));
-        movingImagePrime = IPT::NormalizeImage(movingImagePrime, IPT::IntensityMinMax(movingImagePrime, paramSet.normalization));
+        if(paramSet.normalization >= 0.0)
+        {
+            fixedImagePrime = IPT::NormalizeImage(fixedImagePrime, IPT::IntensityMinMax(fixedImagePrime, paramSet.normalization));
+            movingImagePrime = IPT::NormalizeImage(movingImagePrime, IPT::IntensityMinMax(movingImagePrime, paramSet.normalization));
+        }
 
         if(i == 0) {
             TransformPointer tforNew = CreateBSplineTransform(fixedImagePrime, paramSet.innerParams[0].controlPoints);

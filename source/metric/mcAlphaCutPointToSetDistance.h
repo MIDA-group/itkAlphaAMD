@@ -478,6 +478,16 @@ public:
     m_ApproximationDistanceFraction = distanceFraction;
   }
 
+  double GetDistancePower() const
+  {
+    return m_DistancePower;
+  }
+
+  void SetDistancePower(double power)
+  {
+    m_DistancePower = power;
+  }
+
   unsigned int GetSampleCount() const
   {
     return m_SampleCount;
@@ -671,6 +681,8 @@ public:
 
       MCDSInternal::ValuedCornerPoints<ImageDimension> cornerValues;
 
+      const double localDistancePower = m_DistancePower;
+
       for(unsigned int i = 0; i < CornersType::size; ++i)
       {
         cornerValues.m_Values[i] = 0.0;
@@ -678,7 +690,7 @@ public:
 
         for(unsigned int j = 0; j < m_SampleCount; ++j)
         {
-          cornerValues.m_Values[i] += sqrt(dists_i[j]);
+          cornerValues.m_Values[i] += pow(dists_i[j], m_DistancePower * 0.5); // Instead of sqrt(dists_i[j]) for arbitrary power.
         }
 
         cornerValues.m_Values[i] = cornerValues.m_Values[i] / m_SampleCount;
@@ -710,6 +722,7 @@ protected:
     m_MaxDistance = 0.0;
     m_ApproximationDistanceThreshold = 20.0;
     m_ApproximationDistanceFraction = 0.1;
+    m_DistancePower = 1.0;
   }
 
   ImagePointer m_Image;
@@ -721,6 +734,7 @@ protected:
   double m_MaxDistance;
   double m_ApproximationDistanceThreshold;
   double m_ApproximationDistanceFraction;
+  double m_DistancePower;
   CornersType m_Corners;
   ValueSamplerTypeEnum m_ValueSamplerType;
 
