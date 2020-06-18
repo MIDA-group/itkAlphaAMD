@@ -32,26 +32,27 @@ void RegisterIOFactories() {
 struct PerformanceMetrics {
     double totalOverlap;
     double meanTotalOverlap;
+    double meanUnionOverlap; // Jaccard
     double absDiff;
 };
 
 template <typename TStream>
 void printMetrics(TStream& strm, PerformanceMetrics m, std::string name, bool linebreak=true) {
-    strm << name << "(totalOverlap: " << m.totalOverlap << ", meanTotalOverlap: " << m.meanTotalOverlap << ", absdiff: " << m.absDiff << ").";
+    strm << name << "(totalOverlap: " << m.totalOverlap << ", meanTotalOverlap: " << m.meanTotalOverlap << ", meanUnionOverlap"<< m.meanUnionOverlap << ", absdiff: " << m.absDiff << ").";
     if(linebreak)
         strm << std::endl;
 }
 
 template <typename TStream>
 void printMetricsCSV(TStream& strm, PerformanceMetrics m, bool linebreak=true) {
-    strm << m.totalOverlap << ", " << m.meanTotalOverlap << ", " << m.absDiff;
+    strm << m.totalOverlap << ", " << m.meanTotalOverlap << ", " << m.meanUnionOverlap << ", " << m.absDiff;
     if(linebreak)
         strm << std::endl;
 }
 
 template <typename TStream>
 void printPairOfMetricsCSV(TStream& strm, PerformanceMetrics before, PerformanceMetrics after, bool linebreak=true) {
-    strm << before.totalOverlap << ", " << before.meanTotalOverlap << ", " << before.absDiff << ", " << after.totalOverlap << ", " << after.meanTotalOverlap << ", " << after.absDiff;
+    strm << before.totalOverlap << ", " << before.meanTotalOverlap << ", " << before.meanUnionOverlap << ", " << before.absDiff << ", " << after.totalOverlap << ", " << after.meanTotalOverlap << ", " << after.meanUnionOverlap << ", " << after.absDiff;
     if(linebreak)
         strm << std::endl;
 }
@@ -121,7 +122,9 @@ void LabelAccuracy(
     typename TImageType::Pointer image1,
     typename TImageType::Pointer image2,
     double& totalOverlap,
-    double& meanTotalOverlap) {
+    double& meanTotalOverlap,
+    double& meanUnionOverlap
+    ) {
         
         typedef itk::LabelOverlapMeasuresImageFilter<TImageType> FilterType;
         typedef typename FilterType::Pointer FilterPointer;
@@ -141,6 +144,9 @@ void LabelAccuracy(
         double overlapAcc = 0.0;
         unsigned int overlapCount = 0;
 
+        double unionOverlapAcc = 0.0;
+        unsigned int unionOverlapCount = 0; 
+
         MapType map = filter->GetLabelSetMeasures();
         for (MapConstIterator mapIt = map.begin(); mapIt != map.end(); ++mapIt) {
             // Do not include the background in the final value.
@@ -148,15 +154,35 @@ void LabelAccuracy(
             {
                 continue;
             }
-            double numerator = (double)(*mapIt).second.m_Intersection;
-            double denominator = (double)(*mapIt).second.m_Target;
-            if(denominator > 0) {
-                overlapAcc += (numerator/denominator);
-                ++overlapCount;
+            // Target overlap
+            {
+                double numerator = (double)(*mapIt).second.m_Intersection;
+                double denominator = (double)(*mapIt).second.m_Target;
+                if(denominator > 0) {
+                    overlapAcc += (numerator/denominator);
+                    ++overlapCount;
+                }
+            }
+
+            {
+                double numerator = (double)(*mapIt).second.m_Intersection;
+                double denominator = (double)(*mapIt).second.m_Union;
+                if(denominator > 0) {
+                    unionOverlapAcc += (numerator/denominator);
+                    ++unionOverlapCount;
+                }
             }
         }
 
-        meanTotalOverlap = overlapAcc / overlapCount;
+        if (overlapCount > 0)
+            meanTotalOverlap = overlapAcc / overlapCount;
+        else
+            meanTotalOverlap = 0;
+
+        if (unionOverlapCount > 0)
+            meanUnionOverlap = unionOverlapAcc / unionOverlapCount;
+        else
+            meanUnionOverlap = 0;
 }
 
 
@@ -182,11 +208,12 @@ void DoEvaluateRegistration(
     {       
         LabelImagePointer registeredLabel = ApplyTransformToImage<LabelImageType, TransformType>(refImageLabel, floImageLabel, transformForward, 0, 0);
 
-        LabelAccuracy<LabelImageType>(registeredLabel, refImageLabel, metrics.totalOverlap, metrics.meanTotalOverlap);
+        LabelAccuracy<LabelImageType>(registeredLabel, refImageLabel, metrics.totalOverlap, metrics.meanTotalOverlap, metrics.meanUnionOverlap);
     } else
     {
         metrics.totalOverlap = 0.0;
         metrics.meanTotalOverlap = 0.0;
+        metrics.meanUnionOverlap = 0.0;
     }
 }
 
@@ -254,37 +281,71 @@ public:
 			    std::cerr << err << std::endl;
 		    }
 
+            /*
+            std::cerr << "Reference image information";
+            std::cerr << refImage;
+            std::cerr << "Floating image information";
+            std::cerr << floImage;
+            std::cerr << "Reference label information";
+            std::cerr << refImageLabel;
+            std::cerr << "Floating label information";
+            std::cerr << floImageLabel;
+            */
+
             using TransformBaseType = itk::Transform<double, ImageDimension, ImageDimension>;
             using TransformBasePointer = typename TransformBaseType::Pointer;
             using IdentityTransformType = itk::IdentityTransform<double, ImageDimension>;
             using IdentityTransformPointer = typename IdentityTransformType::Pointer;
 
             IdentityTransformPointer identityTransform = IdentityTransformType::New();
-            TransformBasePointer transformForward = IPT::LoadTransformFile(transformPath.c_str());
+            if (transformPath.length() > 0)
+            {
+                TransformBasePointer transformForward;
+                transformForward = IPT::LoadTransformFile(transformPath.c_str());
 
-            PerformanceMetrics beforeMetrics;
-            DoEvaluateRegistration<IdentityTransformType, ImageType, LabelImageType>(
-                refImage, floImage, refImageLabel, floImageLabel, identityTransform, beforeMetrics
-            );
+                PerformanceMetrics beforeMetrics;
+                DoEvaluateRegistration<IdentityTransformType, ImageType, LabelImageType>(
+                    refImage, floImage, refImageLabel, floImageLabel, identityTransform, beforeMetrics
+                );
 
-            PerformanceMetrics afterMetrics;
-            DoEvaluateRegistration<TransformBaseType, ImageType, LabelImageType>(
-                refImage, floImage, refImageLabel, floImageLabel, transformForward, afterMetrics
-            );
+                PerformanceMetrics afterMetrics;
+                DoEvaluateRegistration<TransformBaseType, ImageType, LabelImageType>(
+                    refImage, floImage, refImageLabel, floImageLabel, transformForward, afterMetrics
+                );
 
-            printPairOfMetricsCSV(std::cout, beforeMetrics, afterMetrics, true);
+                printPairOfMetricsCSV(std::cout, beforeMetrics, afterMetrics, true);
+            } else {
+                PerformanceMetrics metrics;
+                DoEvaluateRegistration<IdentityTransformType, ImageType, LabelImageType>(
+                    refImage, floImage, refImageLabel, floImageLabel, identityTransform, metrics
+                );
+
+                printMetricsCSV(std::cout, metrics, true);
+            }
     }
 
     static void MainFunc(int argc, char** argv)
     {
-        Evaluate(argv[2], argv[3], argv[4], argv[5], argv[6]);
+        if (argc == 7)
+        {
+            Evaluate(argv[2], argv[3], argv[4], argv[5], argv[6]);
+        }
+        else
+        {
+            Evaluate(argv[2], argv[3], argv[4], argv[5], "");
+        }
     }
 };
 
 int main(int argc, char** argv) {
-    if(argc < 7) {
+    if(argc < 6) {
         std::cout << "Too few arguments..." << std::endl;
-        std::cout << "Use as: EvaluateRegistration dim refimagepath floimagepath reflabelpath flolabelpath transformpath" << std::endl;
+        std::cout << "Use as: EvaluateRegistration dim refimagepath floimagepath reflabelpath flolabelpath (transformpath)" << std::endl;
+        return -1;
+    } else if(argc > 7) {
+        std::cout << "Too many arguments..." << std::endl;
+        std::cout << "Use as: EvaluateRegistration dim refimagepath floimagepath reflabelpath flolabelpath (transformpath)" << std::endl;
+        return -1;
     }
     int ndim = atoi(argv[1]);
     if(ndim == 2) {

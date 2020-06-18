@@ -33,7 +33,6 @@ void RegisterIOFactories() {
 struct ProgramConfig {
     std::string affineConfigPath;
     std::string configPath;
-    unsigned int seed;
     unsigned int workers;
     bool rerun;
     std::string refImagePath;
@@ -44,14 +43,24 @@ struct ProgramConfig {
     std::string outPathAffineReverse;
     std::string outPathForward;
     std::string outPathReverse;
+
+    // Animation related
+    std::string  animOutPath;
+    std::string  animFormat;
+    bool         anim16BitMode;
+    std::string  animRenderMode;
+    unsigned int animFreq;
+    unsigned int animDownsampling;
+    std::string  animRefImagePath;
+    std::string  animFloImagePath;
 };
 
 /**
  * Command line arguments
- * binpath dim cfgPath refImagePath floImagePath outPathForward outPathReverse (-refmask refMaskPath) (-flomaskpath floMaskPath) (-seed 1337) (-workers 6)
+ * binpath dim cfgPath refImagePath floImagePath outPathForward outPathReverse (-refmask refMaskPath) (-flomaskpath floMaskPath) (-workers 6)
  */
 
-void readKeyValuePairForProgramConfig(int argc, char** argv, int startIndex, ProgramConfig& cfg) {
+bool readKeyValuePairForProgramConfig(int argc, char** argv, int startIndex, ProgramConfig& cfg) {
     assert(startIndex + 1 < argc);
 
     std::string key = argv[startIndex];
@@ -69,8 +78,6 @@ void readKeyValuePairForProgramConfig(int argc, char** argv, int startIndex, Pro
         cfg.refMaskPath = value;
     } else if (key == "-flo_mask") {
         cfg.floMaskPath = value;
-    } else if (key == "-seed") {
-        cfg.seed = atoi(value.c_str());
     } else if (key == "-workers") {
         cfg.workers = atoi(value.c_str());
     } else if (key == "-rerun") {
@@ -83,10 +90,50 @@ void readKeyValuePairForProgramConfig(int argc, char** argv, int startIndex, Pro
         cfg.outPathForward = value;
     } else if (key == "-out_path_deform_reverse") {
         cfg.outPathReverse = value;
+    } // animation related parameters start here 
+    else if (key == "-anim_out_path")
+    {
+        cfg.animOutPath = value;
     }
+    else if (key == "-anim_freq")
+    {
+        cfg.animFreq = atoi(value.c_str());
+    }
+    else if (key == "-anim_16_bit_mode")
+    {
+        cfg.anim16BitMode = atoi(value.c_str()) != 0;
+    }
+    else if (key == "-anim_render_mode")
+    {
+        cfg.animRenderMode = value;
+    }
+    else if (key == "-anim_format")
+    {
+        cfg.animFormat = value;
+    }
+    else if (key == "-anim_downsampling")
+    {
+        cfg.animDownsampling = atoi(value.c_str());
+    }
+    else if (key == "-anim_ref")
+    {
+        cfg.animRefImagePath = value;
+    }
+    else if (key == "-anim_flo")
+    {
+        cfg.animFloImagePath = value;
+    }
+    else
+    {
+        // Error
+        std::cerr << "Parameter " << key << " with value " << value << " is unsupported." << std::endl;
+        return false;
+    }
+    
+    return true;
 }
 
-ProgramConfig readProgramConfigFromArgs(int argc, char** argv) {
+ProgramConfig readProgramConfigFromArgs(int argc, char** argv, bool& success) {
     ProgramConfig res;
 
     //res.affineConfigPath = argv[2];
@@ -95,14 +142,27 @@ ProgramConfig readProgramConfigFromArgs(int argc, char** argv) {
     //res.floImagePath = argv[5];
 
     // Defaults for optional parameters
-    res.seed = 1337;
     res.workers = 6;
     res.rerun = true;
     res.refMaskPath = "";
     res.floMaskPath = "";
+
+    // Animation defaults
+    res.animOutPath = "";
+    res.animFormat = "png";
+    res.anim16BitMode = false;
+    res.animRenderMode = "floating";
+    res.animFreq = 50;
+    res.animDownsampling = 1;
+    res.animRefImagePath = "";
+    res.animFloImagePath = "";
     
-    for (int i = 2; i+1 < argc; ++i) {
-        readKeyValuePairForProgramConfig(argc, argv, i, res);
+    for (int i = 2; i+1 < argc; i += 2) {
+        if(!readKeyValuePairForProgramConfig(argc, argv, i, res))
+        {
+            success = false;
+            break;
+        }
     }
 
     return res;
@@ -120,6 +180,165 @@ bool checkFile(std::string path)
         return true;
     }
 }
+
+// Animation callback
+
+
+template <typename TImageType, typename TTransformType>
+typename TImageType::Pointer AnimApplyTransformToImage(
+    typename TImageType::Pointer refImage,
+    typename TImageType::Pointer floImage,
+    typename TTransformType::Pointer transform,
+    int interpolator = 1,
+    typename TImageType::PixelType defaultValue = 0)
+{
+    if(!transform)
+    {
+        return floImage;
+    }
+
+    typedef itk::ResampleImageFilter<
+        TImageType,
+        TImageType>
+        ResampleFilterType;
+
+    typename ResampleFilterType::Pointer resample = ResampleFilterType::New();
+
+    resample->SetTransform(transform);
+    resample->SetInput(floImage);
+
+    // Linear interpolator (1) is the default
+    if (interpolator == 0)
+    {
+        auto interp = itk::NearestNeighborInterpolateImageFunction<TImageType, double>::New();
+        resample->SetInterpolator(interp);
+    }
+    else if (interpolator == 2)
+    {
+        auto interp = itk::BSplineInterpolateImageFunction<TImageType, double>::New();//itk::BSplineInterpolationWeightFunction<double, ImageDimension, 3U>::New();
+        resample->SetInterpolator(interp);
+    }
+
+    resample->SetSize(refImage->GetLargestPossibleRegion().GetSize());
+    resample->SetOutputOrigin(refImage->GetOrigin());
+    resample->SetOutputSpacing(refImage->GetSpacing());
+    resample->SetOutputDirection(refImage->GetDirection());
+    resample->SetDefaultPixelValue(defaultValue);
+
+    resample->UpdateLargestPossibleRegion();
+
+    return resample->GetOutput();
+}
+
+template <typename TImageType, typename TTransformType, unsigned int Dim>
+struct RegistrationAnimationCallback : public BSplineRegistrationCallback<TTransformType, Dim>
+{
+    public:
+
+    using ImageType = TImageType;
+    using ImagePointer = typename ImageType::Pointer;
+
+    using TransformType = TTransformType;
+    using TransformPointer = typename TransformType::Pointer;
+
+    using IPT = itk::IPT<double, Dim>;
+
+    // Inherited
+    //TransformPointer m_TransformForward;
+    //TransformPointer m_TransformReverse;
+
+    std::string m_Path;
+    std::string m_Format;
+    unsigned int m_Counter;
+    unsigned int m_Freq;
+    bool m_Format16BitMode;
+    unsigned int m_Downsampling;
+    std::string m_RenderMode;
+    ImagePointer m_RefImage;
+    ImagePointer m_FloImage;
+
+    unsigned int m_WriteCounter;
+
+    RegistrationAnimationCallback(
+        std::string path,
+        std::string format,
+        bool format16BitMode,
+        std::string renderMode,
+        unsigned int freq,
+        unsigned int downsampling,
+        ImagePointer refImage,
+        ImagePointer floImage)
+    {
+        m_Counter = 0;
+        m_WriteCounter = 1;
+
+        m_Path = path;
+        m_Format = format;
+        m_Format16BitMode = format16BitMode;
+        m_RenderMode = renderMode;
+        m_Downsampling = downsampling;
+
+        if (freq == 0)
+        {
+            m_Freq = 1;
+        }
+        else
+        {
+            m_Freq = freq;
+        }
+
+        m_RefImage = refImage;
+        m_FloImage = floImage;
+    }
+
+    virtual void Invoke()
+    {
+        if (m_Counter % m_Freq == 0)
+        {
+            std::string fname = m_Path;
+
+            char buf[256];
+            sprintf(buf, "frame%05d.%s", m_WriteCounter, m_Format.c_str());
+            
+            fname += buf;
+
+            // This can be optimized to not first produce a full resolution image and then subsample it...
+
+            ImagePointer frame = AnimApplyTransformToImage<ImageType, TransformType>(m_RefImage, m_FloImage, this->m_TransformForward, 1, 0);
+            if (m_RenderMode == "difference")
+            {
+                frame = IPT::DifferenceImage(m_RefImage, frame);
+            } else if (m_RenderMode == "composite")
+            {
+                // TO be done
+            } else if (m_RenderMode == "alternating")
+            {
+                if (m_WriteCounter % 2 == 0)
+                {
+                    frame = m_RefImage;
+                }
+            } else if (m_RenderMode == "floating" || m_RenderMode == "")
+            {
+                ;
+            }
+            
+            frame = IPT::SubsampleImage(frame, m_Downsampling);
+
+            if (m_Format16BitMode)
+            {
+                IPT::SaveImageU16(fname.c_str(), frame);
+            }
+            else
+            {
+                IPT::SaveImageU8(fname.c_str(), frame);
+            }
+            
+            ++m_WriteCounter;
+        }
+
+        ++m_Counter;
+    }
+};
 
 template <unsigned int ImageDimension>
 class RegisterDeformableProgram
@@ -200,6 +419,12 @@ class RegisterDeformableProgram
             return success;
 	    }
 
+        // Print information about images
+        std::cerr << "Reference image information" << std::endl;
+        std::cerr << refImage << std::endl;
+        std::cerr << "Floating image information" << std::endl;
+        std::cerr << floImage << std::endl;
+
         ImagePointer refImageMask;
         if (cfg.refMaskPath != "") {
             try {
@@ -236,6 +461,57 @@ class RegisterDeformableProgram
         TransformPointer forwardTransform;
         TransformPointer inverseTransform;
 
+        using RegistrationAnimationCallbackType = RegistrationAnimationCallback<ImageType, TransformType, ImageDimension>;
+        
+        // Setup animation
+
+        RegistrationAnimationCallbackType* animationCallback = nullptr;
+
+        if (cfg.animOutPath != "")
+        {
+            ImagePointer animRefImage = refImage;
+            ImagePointer animFloImage = floImage;
+
+            if (cfg.animRefImagePath != "")
+            {
+                try {
+                    animRefImage = IPT::LoadImage(cfg.animRefImagePath.c_str());
+                }
+                catch (itk::ExceptionObject & err)
+                {
+                    std::cerr << "Error loading animation reference image: " << cfg.animRefImagePath.c_str() << std::endl;
+	                std::cerr << "ExceptionObject caught !" << std::endl;
+	                std::cerr << err << std::endl;
+                    success = false;
+                    return success;
+	            }                
+            }
+            if (cfg.animFloImagePath != "")
+            {
+                try {
+                    animFloImage = IPT::LoadImage(cfg.animFloImagePath.c_str());
+                }
+                catch (itk::ExceptionObject & err)
+                {
+                    std::cerr << "Error loading animation floating image: " << cfg.animFloImagePath.c_str() << std::endl;
+	                std::cerr << "ExceptionObject caught !" << std::endl;
+	                std::cerr << err << std::endl;
+                    success = false;
+                    return success;
+	            }                
+            }
+
+            animationCallback = new RegistrationAnimationCallbackType(
+                cfg.animOutPath,
+                cfg.animFormat,
+                cfg.anim16BitMode,
+                cfg.animRenderMode,
+                cfg.animFreq,
+                cfg.animDownsampling,
+                animRefImage,
+                animFloImage);
+        }
+
         std::cerr << "Starting registration" << std::endl;
 
         std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
@@ -250,7 +526,7 @@ class RegisterDeformableProgram
             affineTransform,
             forwardTransform,
             inverseTransform,
-            nullptr);
+            animationCallback);
 
         std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(end - begin).count();
@@ -258,6 +534,11 @@ class RegisterDeformableProgram
         // Remove the mask images (if they exist)
         refImageMask = nullptr;
         floImageMask = nullptr;
+
+        if (animationCallback != nullptr)
+        {
+            delete animationCallback;
+        }
 
         if(cfg.outPathForward.length() > 260) {
             std::cerr << "Error. Too long forward transform path." << std::endl;
@@ -331,7 +612,12 @@ class RegisterDeformableProgram
         chronometer.Start("Registration");
         memorymeter.Start("Registration");
 
-        ProgramConfig config = readProgramConfigFromArgs(argc, argv);
+        bool success = true;
+        ProgramConfig config = readProgramConfigFromArgs(argc, argv, success);
+        if (!success)
+        {
+            return -1;
+        }
         std::cout << "Program config read..." << std::endl;
         BSplineRegParamOuter affineParams = readConfig(config.affineConfigPath);
         std::cout << "Affine registration config read..." << std::endl;
@@ -342,7 +628,7 @@ class RegisterDeformableProgram
         itk::MultiThreaderBase::SetGlobalMaximumNumberOfThreads(config.workers);
         itk::MultiThreaderBase::SetGlobalDefaultNumberOfThreads(config.workers);
 
-        bool success = Run(config, affineParams, params);
+        success = Run(config, affineParams, params);
 
         chronometer.Stop("Registration");
         memorymeter.Stop("Registration");

@@ -49,6 +49,8 @@ add_executable(RegisterDeformable source/programs/registerDeformable.cpp)
 
 add_executable(EvaluateRegistration source/programs/evaluateRegistration.cpp)
 
+add_executable(RandomBSpline source/programs/synthDeformImage.cpp)
+
 target_link_libraries(ACRandomTransforms ${ITK_LIBRARIES})
 
 target_link_libraries(ACRegister ${ITK_LIBRARIES})
@@ -80,3 +82,5 @@ target_link_libraries(TestSuite ${ITK_LIBRARIES})
 target_link_libraries(RegisterDeformable ${ITK_LIBRARIES})
 
 target_link_libraries(EvaluateRegistration ${ITK_LIBRARIES})
+
+target_link_libraries(RandomBSpline ${ITK_LIBRARIES})

@@ -105,7 +105,7 @@ inline double PerformEaseOut(double value, double easeOutThreshold)
 }
 
 template <unsigned int ImageDimension>
-inline double InterpolateDistancesWithGrad(itk::Vector<double, ImageDimension> frac, ValuedCornerPoints<ImageDimension>& distanceValues, itk::Vector<double, ImageDimension>& grad, double easeOutThreshold=0.1);
+inline double InterpolateDistancesWithGrad(itk::Vector<double, ImageDimension> frac, ValuedCornerPoints<ImageDimension>& distanceValues, itk::Vector<double, ImageDimension>& grad, double easeOutThreshold=0.0);
 
 // Linear interpolation
 template <>
@@ -488,6 +488,16 @@ public:
     m_DistancePower = power;
   }
 
+  bool GetInwardsMode() const
+  {
+    return m_InwardsMode;
+  }
+
+  void SetInwardsMode(bool mode)
+  {
+    m_InwardsMode = mode;
+  }
+
   unsigned int GetSampleCount() const
   {
     return m_SampleCount;
@@ -599,15 +609,36 @@ public:
       evalContext->m_Sampler->Sample(val, pointIndex, i, evalContext->m_Samples);
       
       InternalValueType valQ = QuantizeValue<ValueType, InternalValueType>(val[0]);
-      if(valQ <= hQ)
+      if (m_InwardsMode)
       {
-          evalContext->m_InwardsValues.push_back(valQ);
+          if(hQ > 0)
+            evalContext->m_InwardsValues.push_back(valQ % hQ);
+          else
+            evalContext->m_InwardsValues.push_back(0);
       }
       else
       {
-          evalContext->m_ComplementValues.push_back(QuantizedValueMax<InternalValueType>() - valQ);
+        if(valQ <= hQ)
+        {
+            evalContext->m_InwardsValues.push_back(valQ);
+        }
+        else
+        {
+            evalContext->m_ComplementValues.push_back(QuantizedValueMax<InternalValueType>() - valQ);
+        }
       }
     }
+    
+    // For now, just remove the complement values when in inwards mode... this is not optimal.
+    /*if (m_InwardsMode)
+    {
+      evalContext->m_ComplementValues.clear();
+      if (evalContext->m_InwardsValues.size() == 0)
+      {
+        return false;
+      }
+    }*/
+
     std::sort(evalContext->m_InwardsValues.begin(), evalContext->m_InwardsValues.end());
     std::sort(evalContext->m_ComplementValues.begin(), evalContext->m_ComplementValues.end());
 
@@ -657,10 +688,10 @@ public:
       }
     }
 
+    unsigned int sampleCount = evalContext->m_InwardsValues.size() + evalContext->m_ComplementValues.size();   
+
     if(isFullyInside && (inwardsStart < evalContext->m_InwardsValues.size() || complementStart < evalContext->m_ComplementValues.size()))
-    {
-      unsigned int sampleCount = evalContext->m_InwardsValues.size() + evalContext->m_ComplementValues.size();   
-    
+    {    
       double dmax = m_MaxDistance;
       double dmaxSq = dmax * dmax;
       for(unsigned int i = 0; i < CornersType::size; ++i) {
@@ -686,14 +717,14 @@ public:
       for(unsigned int i = 0; i < CornersType::size; ++i)
       {
         cornerValues.m_Values[i] = 0.0;
-        double* dists_i = evalContext->m_Table.get() + (m_SampleCount * i);
+        double* dists_i = evalContext->m_Table.get() + (sampleCount * i);
 
-        for(unsigned int j = 0; j < m_SampleCount; ++j)
+        for(unsigned int j = 0; j < sampleCount; ++j)
         {
           cornerValues.m_Values[i] += pow(dists_i[j], m_DistancePower * 0.5); // Instead of sqrt(dists_i[j]) for arbitrary power.
         }
 
-        cornerValues.m_Values[i] = cornerValues.m_Values[i] / m_SampleCount;
+        cornerValues.m_Values[i] = cornerValues.m_Values[i] / sampleCount;
       }
 
       valueOut = MCDSInternal::InterpolateDistancesWithGrad<ImageDimension>(frac, cornerValues, gradOut);
@@ -723,6 +754,7 @@ protected:
     m_ApproximationDistanceThreshold = 20.0;
     m_ApproximationDistanceFraction = 0.1;
     m_DistancePower = 1.0;
+    m_InwardsMode = false;
   }
 
   ImagePointer m_Image;
@@ -735,6 +767,7 @@ protected:
   double m_ApproximationDistanceThreshold;
   double m_ApproximationDistanceFraction;
   double m_DistancePower;
+  bool m_InwardsMode;
   CornersType m_Corners;
   ValueSamplerTypeEnum m_ValueSamplerType;
 
