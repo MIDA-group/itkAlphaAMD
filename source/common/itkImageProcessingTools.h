@@ -68,6 +68,15 @@ typename ImageType::Pointer RemoveDirectionInformation(typename ImageType::Point
     FilterPointer filter = FilterType::New();
     filter->SetInput(image);
 
+    typename ImageType::PointType origin;
+    for (unsigned int i = 0; i < ImageType::ImageDimension; ++i)
+    {
+        origin[i] = 0;
+    }
+
+    filter->SetOutputOrigin(origin);
+    filter->ChangeOriginOn();
+
     auto rot = image->GetDirection();
     rot.SetIdentity();
     filter->SetOutputDirection(rot);
