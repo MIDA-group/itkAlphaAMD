@@ -396,6 +396,8 @@ class RegisterDeformableProgram
         ImagePointer refImage;
         try {
             refImage = IPT::LoadImage(cfg.refImagePath.c_str());
+
+            refImage = RemoveDirectionInformation<ImageType>(refImage);
         }
         catch (itk::ExceptionObject & err)
 	    {
@@ -409,6 +411,8 @@ class RegisterDeformableProgram
         ImagePointer floImage;
         try {
             floImage = IPT::LoadImage(cfg.floImagePath.c_str());
+
+            floImage = RemoveDirectionInformation<ImageType>(floImage);
         }
         catch (itk::ExceptionObject & err)
 		{

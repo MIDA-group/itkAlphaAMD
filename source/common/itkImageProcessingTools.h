@@ -57,6 +57,27 @@
 #include "itkLinearInterpolateImageFunction.h"
 #include "itkBSplineInterpolateImageFunction.h"
 
+#include "itkChangeInformationImageFilter.h"
+
+template <typename ImageType>
+typename ImageType::Pointer RemoveDirectionInformation(typename ImageType::Pointer image)
+{
+    using FilterType = itk::ChangeInformationImageFilter<ImageType>;
+    using FilterPointer = typename FilterType::Pointer;
+
+    FilterPointer filter = FilterType::New();
+    filter->SetInput(image);
+
+    auto rot = image->GetDirection();
+    rot.SetIdentity();
+    filter->SetOutputDirection(rot);
+    filter->ChangeDirectionOn();
+
+    filter->UpdateOutputInformation();
+
+    return filter->GetOutput();
+}
+
 namespace itk
 {
 
