@@ -239,6 +239,8 @@ public:
             ImagePointer refImage;
             try {
                 refImage = IPT::LoadImage(refImagePath.c_str());
+
+                refImage = RemoveDirectionInformation<ImageType>(refImage);
             }
             catch (itk::ExceptionObject & err)
 		    {
@@ -250,6 +252,8 @@ public:
             ImagePointer floImage;
             try {
                 floImage = IPT::LoadImage(floImagePath.c_str());
+
+                floImage = RemoveDirectionInformation<ImageType>(floImage);
             }
             catch (itk::ExceptionObject & err)
 		    {
@@ -262,6 +266,8 @@ public:
             LabelImagePointer refImageLabel;
             try {
                 refImageLabel = IPT::LoadLabelImage(refLabelPath.c_str());
+
+                refImageLabel = RemoveDirectionInformation<LabelImageType>(refImageLabel);
             }
             catch (itk::ExceptionObject & err)
 		    {
@@ -273,6 +279,8 @@ public:
             LabelImagePointer floImageLabel;
             try {
                 floImageLabel = IPT::LoadLabelImage(floLabelPath.c_str());
+
+                floImageLabel = RemoveDirectionInformation<LabelImageType>(floImageLabel);
             }
             catch (itk::ExceptionObject & err)
 		    {
