@@ -83,7 +83,7 @@ typename ImageType::Pointer RemoveDirectionInformation(typename ImageType::Point
     filter->SetOutputDirection(rot);
     filter->ChangeDirectionOn();
 
-    filter->UpdateOutputInformation();
+    filter->Update();
 
     auto result = filter->GetOutput();
 
