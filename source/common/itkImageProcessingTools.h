@@ -68,6 +68,7 @@ typename ImageType::Pointer RemoveDirectionInformation(typename ImageType::Point
     FilterPointer filter = FilterType::New();
     filter->SetInput(image);
 
+/*
     typename ImageType::PointType origin;
     for (unsigned int i = 0; i < ImageType::ImageDimension; ++i)
     {
@@ -76,7 +77,7 @@ typename ImageType::Pointer RemoveDirectionInformation(typename ImageType::Point
 
     filter->SetOutputOrigin(origin);
     filter->ChangeOriginOn();
-
+*/
     auto rot = image->GetDirection();
     rot.SetIdentity();
     filter->SetOutputDirection(rot);
@@ -84,7 +85,12 @@ typename ImageType::Pointer RemoveDirectionInformation(typename ImageType::Point
 
     filter->UpdateOutputInformation();
 
-    return filter->GetOutput();
+    auto result = filter->GetOutput();
+
+    result->SetRequestedRegion(result->GetLargestPossibleRegion());
+    result->SetBufferedRegion(result->GetLargestPossibleRegion());
+
+    return result;
 }
 
 namespace itk
