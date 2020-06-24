@@ -34,6 +34,7 @@ struct PerformanceMetrics {
     double meanTotalOverlap;
     double meanUnionOverlap; // Jaccard
     double absDiff;
+    unsigned int labelCount;
 };
 
 template <typename TStream>
@@ -44,15 +45,19 @@ void printMetrics(TStream& strm, PerformanceMetrics m, std::string name, bool li
 }
 
 template <typename TStream>
-void printMetricsCSV(TStream& strm, PerformanceMetrics m, bool linebreak=true) {
-    strm << m.totalOverlap << ", " << m.meanTotalOverlap << ", " << m.meanUnionOverlap << ", " << m.absDiff;
+void printMetricsCSV(TStream& strm, PerformanceMetrics m, bool linebreak=true, std::string ident = "") {
+    strm << m.totalOverlap << ", " << m.meanTotalOverlap << ", " << m.meanUnionOverlap << ", " << m.absDiff << ", " << m.labelCount;
+    if(ident.length() > 0)
+        strm << ", " << ident;
     if(linebreak)
         strm << std::endl;
 }
 
 template <typename TStream>
-void printPairOfMetricsCSV(TStream& strm, PerformanceMetrics before, PerformanceMetrics after, bool linebreak=true) {
-    strm << before.totalOverlap << ", " << before.meanTotalOverlap << ", " << before.meanUnionOverlap << ", " << before.absDiff << ", " << after.totalOverlap << ", " << after.meanTotalOverlap << ", " << after.meanUnionOverlap << ", " << after.absDiff;
+void printPairOfMetricsCSV(TStream& strm, PerformanceMetrics before, PerformanceMetrics after, bool linebreak=true, std::string ident = "") {
+    strm << before.totalOverlap << ", " << before.meanTotalOverlap << ", " << before.meanUnionOverlap << ", " << before.absDiff << ", " << after.totalOverlap << ", " << after.meanTotalOverlap << ", " << after.meanUnionOverlap << ", " << after.absDiff << ", " << after.labelCount;
+    if(ident.length() > 0)
+        strm << ", " << ident;
     if(linebreak)
         strm << std::endl;
 }
@@ -123,7 +128,8 @@ void LabelAccuracy(
     typename TImageType::Pointer image2,
     double& totalOverlap,
     double& meanTotalOverlap,
-    double& meanUnionOverlap
+    double& meanUnionOverlap,
+    unsigned int& labelCount
     ) {
         
         typedef itk::LabelOverlapMeasuresImageFilter<TImageType> FilterType;
@@ -146,6 +152,7 @@ void LabelAccuracy(
 
         double unionOverlapAcc = 0.0;
         unsigned int unionOverlapCount = 0; 
+        unsigned int localLabelCount = 0;
 
         MapType map = filter->GetLabelSetMeasures();
         for (MapConstIterator mapIt = map.begin(); mapIt != map.end(); ++mapIt) {
@@ -154,6 +161,8 @@ void LabelAccuracy(
             {
                 continue;
             }
+
+            ++localLabelCount;
             // Target overlap
             {
                 double numerator = (double)(*mapIt).second.m_Intersection;
@@ -183,6 +192,8 @@ void LabelAccuracy(
             meanUnionOverlap = unionOverlapAcc / unionOverlapCount;
         else
             meanUnionOverlap = 0;
+
+        labelCount = localLabelCount;
 }
 
 
@@ -208,12 +219,13 @@ void DoEvaluateRegistration(
     {       
         LabelImagePointer registeredLabel = ApplyTransformToImage<LabelImageType, TransformType>(refImageLabel, floImageLabel, transformForward, 0, 0);
 
-        LabelAccuracy<LabelImageType>(registeredLabel, refImageLabel, metrics.totalOverlap, metrics.meanTotalOverlap, metrics.meanUnionOverlap);
+        LabelAccuracy<LabelImageType>(registeredLabel, refImageLabel, metrics.totalOverlap, metrics.meanTotalOverlap, metrics.meanUnionOverlap, metrics.labelCount);
     } else
     {
         metrics.totalOverlap = 0.0;
         metrics.meanTotalOverlap = 0.0;
         metrics.meanUnionOverlap = 0.0;
+        metrics.labelCount = 0;
     }
 }
 
@@ -233,6 +245,7 @@ public:
         std::string floImagePath,
         std::string refLabelPath, 
         std::string floLabelPath,
+        std::string ident,
         std::string transformPath
         )
     {
@@ -321,26 +334,30 @@ public:
                     refImage, floImage, refImageLabel, floImageLabel, transformForward, afterMetrics
                 );
 
-                printPairOfMetricsCSV(std::cout, beforeMetrics, afterMetrics, true);
+                printPairOfMetricsCSV(std::cout, beforeMetrics, afterMetrics, true, ident);
             } else {
                 PerformanceMetrics metrics;
                 DoEvaluateRegistration<IdentityTransformType, ImageType, LabelImageType>(
                     refImage, floImage, refImageLabel, floImageLabel, identityTransform, metrics
                 );
 
-                printMetricsCSV(std::cout, metrics, true);
+                printMetricsCSV(std::cout, metrics, true, ident);
             }
     }
 
     static void MainFunc(int argc, char** argv)
     {
+        if (argc == 8)
+        {
+            Evaluate(argv[2], argv[3], argv[4], argv[5], argv[6], argv[7]);
+        }
         if (argc == 7)
         {
-            Evaluate(argv[2], argv[3], argv[4], argv[5], argv[6]);
+            Evaluate(argv[2], argv[3], argv[4], argv[5], argv[6], "");
         }
         else
         {
-            Evaluate(argv[2], argv[3], argv[4], argv[5], "");
+            Evaluate(argv[2], argv[3], argv[4], argv[5], "", "");
         }
     }
 };
@@ -348,11 +365,11 @@ public:
 int main(int argc, char** argv) {
     if(argc < 6) {
         std::cout << "Too few arguments..." << std::endl;
-        std::cout << "Use as: EvaluateRegistration dim refimagepath floimagepath reflabelpath flolabelpath (transformpath)" << std::endl;
+        std::cout << "Use as: EvaluateRegistration dim refimagepath floimagepath reflabelpath flolabelpath (id) (transformpath)" << std::endl;
         return -1;
-    } else if(argc > 7) {
+    } else if(argc > 8) {
         std::cout << "Too many arguments..." << std::endl;
-        std::cout << "Use as: EvaluateRegistration dim refimagepath floimagepath reflabelpath flolabelpath (transformpath)" << std::endl;
+        std::cout << "Use as: EvaluateRegistration dim refimagepath floimagepath reflabelpath flolabelpath (id) (transformpath)" << std::endl;
         return -1;
     }
     int ndim = atoi(argv[1]);
