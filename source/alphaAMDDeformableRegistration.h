@@ -814,6 +814,7 @@ void mcalpha_register_func(typename ImageType::Pointer fixedImage, typename Imag
     }
 }
 
+// To fix: Normalization and equalization should only take values inside the mask into account
 void register_deformable(
     typename ImageType::Pointer fixedImage,
     typename ImageType::Pointer movingImage,
@@ -927,6 +928,8 @@ void register_deformable(
         {
             fixedImagePrime = IPT::NormalizeImage(fixedImagePrime, IPT::IntensityMinMax(fixedImagePrime, paramSet.normalization));
             movingImagePrime = IPT::NormalizeImage(movingImagePrime, IPT::IntensityMinMax(movingImagePrime, paramSet.normalization));
+            fixedImagePrime = IPT::HistogramEqualization(fixedImagePrime, nullptr, 256);
+            movingImagePrime = IPT::HistogramEqualization(movingImagePrime, nullptr, 256);
         }
 
         std::cerr << "Starting affine registration " << i << std::endl;
@@ -969,6 +972,8 @@ void register_deformable(
         {
             fixedImagePrime = IPT::NormalizeImage(fixedImagePrime, IPT::IntensityMinMax(fixedImagePrime, paramSet.normalization));
             movingImagePrime = IPT::NormalizeImage(movingImagePrime, IPT::IntensityMinMax(movingImagePrime, paramSet.normalization));
+            fixedImagePrime = IPT::HistogramEqualization(fixedImagePrime, nullptr, 256);
+            movingImagePrime = IPT::HistogramEqualization(movingImagePrime, nullptr, 256);
         }
 
         if(i == 0) {

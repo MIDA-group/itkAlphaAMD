@@ -1558,7 +1558,103 @@ class IPT
             result.span = 1.0;
         }
 
-        return result;        
+        return result;   
+    }
+
+    // Assumes that the image is normalized before-hand
+    static ImagePointer HistogramEqualization(
+        ImagePointer image,
+        BinaryImagePointer mask,
+        unsigned int bins
+    )
+    {
+        ImagePointer resultImage = CloneImage(image);
+
+        itk::ImageRegionIterator<ImageType> reader(image, image->GetLargestPossibleRegion());
+        reader.GoToBegin();
+
+        std::vector<unsigned int> hist;
+
+        for(unsigned int i = 0; i < bins + 1; ++i)
+        {
+            hist.push_back(0);
+        }
+
+        unsigned int totalCount = 0;
+        if (mask)
+        {
+            itk::ImageRegionIterator<BinaryImageType> maskReader(mask, mask->GetLargestPossibleRegion());
+            
+            maskReader.GoToBegin();
+
+            while (!reader.IsAtEnd())
+            {
+                assert(!maskReader.IsAtEnd());
+
+                if (maskReader.Get())
+                {
+                    unsigned int index = (unsigned int)(reader.Get() * bins + 0.5);
+                    ++hist[index];
+                    ++totalCount;
+                }
+                ++reader;
+                ++maskReader;
+            }
+        } else {
+            while (!reader.IsAtEnd())
+            {
+                unsigned int index = (unsigned int)(reader.Get() * bins + 0.5);
+                ++hist[index];
+                ++totalCount;
+                ++reader;
+            }
+        }
+
+        unsigned int hist_min = hist.size();
+        unsigned int counter = 0;
+        for (unsigned int i = 0; i < hist.size(); ++i)
+        {
+            unsigned int prevCounter = 0;
+            counter += hist[i];
+            hist[i] = counter;
+
+            if (prevCounter == 0 && counter > 0)
+            {
+                hist_min = i;
+            }
+        }
+
+        itk::ImageRegionIterator<ImageType> writer(resultImage, image->GetLargestPossibleRegion());
+        if (mask)
+        {
+            itk::ImageRegionIterator<BinaryImageType> maskReader(mask, mask->GetLargestPossibleRegion());
+            
+            maskReader.GoToBegin();
+
+            while (!writer.IsAtEnd())
+            {
+                assert(!maskReader.IsAtEnd());
+
+                if (maskReader.Get())
+                {
+                    unsigned int index = (unsigned int)(writer.Get() * bins + 0.5);
+                    double f = (hist[index]-hist_min) / ((double)(totalCount-hist_min));
+                    writer.Set(f);
+                }
+                ++writer;
+                ++maskReader;
+            }
+        } else {
+            while (!writer.IsAtEnd())
+            {
+                unsigned int index = (unsigned int)(writer.Get() * bins + 0.5);
+                double f = (hist[index]-hist_min) / ((double)(totalCount-hist_min));
+                writer.Set(f);
+                ++writer;
+            }
+        }
+
+        return resultImage;
     }
 
     static ImagePointer NormalizeImage(
