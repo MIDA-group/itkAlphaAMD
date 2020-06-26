@@ -351,7 +351,7 @@ public:
         {
             Evaluate(argv[2], argv[3], argv[4], argv[5], argv[6], argv[7]);
         }
-        if (argc == 7)
+        else if (argc == 7)
         {
             Evaluate(argv[2], argv[3], argv[4], argv[5], argv[6], "");
         }
