@@ -928,8 +928,8 @@ void register_deformable(
         {
             fixedImagePrime = IPT::NormalizeImage(fixedImagePrime, IPT::IntensityMinMax(fixedImagePrime, paramSet.normalization));
             movingImagePrime = IPT::NormalizeImage(movingImagePrime, IPT::IntensityMinMax(movingImagePrime, paramSet.normalization));
-            fixedImagePrime = IPT::HistogramEqualization(fixedImagePrime, nullptr, 256);
-            movingImagePrime = IPT::HistogramEqualization(movingImagePrime, nullptr, 256);
+            fixedImagePrime = IPT::HistogramEqualization(fixedImagePrime, nullptr, 255);
+            movingImagePrime = IPT::HistogramEqualization(movingImagePrime, nullptr, 255);
         }
 
         std::cerr << "Starting affine registration " << i << std::endl;
@@ -972,8 +972,8 @@ void register_deformable(
         {
             fixedImagePrime = IPT::NormalizeImage(fixedImagePrime, IPT::IntensityMinMax(fixedImagePrime, paramSet.normalization));
             movingImagePrime = IPT::NormalizeImage(movingImagePrime, IPT::IntensityMinMax(movingImagePrime, paramSet.normalization));
-            fixedImagePrime = IPT::HistogramEqualization(fixedImagePrime, nullptr, 256);
-            movingImagePrime = IPT::HistogramEqualization(movingImagePrime, nullptr, 256);
+            fixedImagePrime = IPT::HistogramEqualization(fixedImagePrime, nullptr, 255);
+            movingImagePrime = IPT::HistogramEqualization(movingImagePrime, nullptr, 255);
         }
 
         if(i == 0) {

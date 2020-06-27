@@ -1610,27 +1610,32 @@ class IPT
             }
         }
 
-        unsigned int hist_min = hist.size();
+        unsigned int hist_min_index = hist.size();
         unsigned int counter = 0;
         for (unsigned int i = 0; i < hist.size(); ++i)
         {
-            unsigned int prevCounter = 0;
             counter += hist[i];
             hist[i] = counter;
 
-            if (prevCounter == 0 && counter > 0)
+            if (hist_min_index == hist.size() && counter > 0)
             {
-                hist_min = i;
+                hist_min_index = i;
             }
         }
+        unsigned int hist_min = hist[hist_min_index];
+        double denom = (double)(totalCount-hist_min);
+        if (totalCount == hist_min)
+        {
+            denom = 1.0;
+        }
 
-        itk::ImageRegionIterator<ImageType> writer(resultImage, image->GetLargestPossibleRegion());
+        itk::ImageRegionIterator<ImageType> writer(resultImage, resultImage->GetLargestPossibleRegion());
         if (mask)
         {
             itk::ImageRegionIterator<BinaryImageType> maskReader(mask, mask->GetLargestPossibleRegion());
             
             maskReader.GoToBegin();
-
+            
             while (!writer.IsAtEnd())
             {
                 assert(!maskReader.IsAtEnd());
@@ -1638,7 +1643,7 @@ class IPT
                 if (maskReader.Get())
                 {
                     unsigned int index = (unsigned int)(writer.Get() * bins + 0.5);
-                    double f = (hist[index]-hist_min) / ((double)(totalCount-hist_min));
+                    double f = (hist[index]-hist_min) / denom;
                     writer.Set(f);
                 }
                 ++writer;
@@ -1648,7 +1653,7 @@ class IPT
             while (!writer.IsAtEnd())
             {
                 unsigned int index = (unsigned int)(writer.Get() * bins + 0.5);
-                double f = (hist[index]-hist_min) / ((double)(totalCount-hist_min));
+                double f = (hist[index]-hist_min) / denom;
                 writer.Set(f);
                 ++writer;
             }
