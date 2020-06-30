@@ -1565,9 +1565,14 @@ class IPT
     static ImagePointer HistogramEqualization(
         ImagePointer image,
         BinaryImagePointer mask,
-        unsigned int bins
+        int bins
     )
     {
+        if (bins <= 0)
+        {
+            return image;
+        }
+
         ImagePointer resultImage = CloneImage(image);
 
         itk::ImageRegionIterator<ImageType> reader(image, image->GetLargestPossibleRegion());

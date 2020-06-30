@@ -86,11 +86,14 @@ struct BSplineRegParam
     unsigned long long alphaLevels;
     bool gradientMagnitude;
     double normalization;
+    int histogramEqualization;
     double learningRate;
     double momentum;
     double lambdaFactor;
     double dmax;
     double distancePower;
+    double approximationThreshold;
+    double approximationFraction;
     bool inwardsMode;
     unsigned long long seed;
     bool enableCallbacks;
@@ -153,7 +156,13 @@ BSplineRegParamOuter readConfig(std::string path) {
         readJSONKey(m_i, "gradientMagnitude", &paramSet.gradientMagnitude);
         paramSet.normalization = 0.0;
         readJSONKey(m_i, "normalization", &paramSet.normalization);
-        paramSet.learningRate = 0.1;
+        paramSet.histogramEqualization = 0;
+        readJSONKey(m_i, "histogramEqualization", &paramSet.histogramEqualization);
+        paramSet.approximationThreshold = 20.0;
+        readJSONKey(m_i, "approximationThreshold", &paramSet.approximationThreshold);
+        paramSet.approximationFraction = 0.2;
+        readJSONKey(m_i, "approximationFraction", &paramSet.approximationFraction);
+        paramSet.learningRate = 1.0;
         readJSONKey(m_i, "learningRate", &paramSet.learningRate);
         paramSet.momentum = 0.1;
         readJSONKey(m_i, "momentum", &paramSet.momentum);
@@ -488,7 +497,14 @@ double ImageDiagonal(typename ImageType::Pointer image)
     return sqrt(acc);
 }
 
-bool ParseGradientWeightingParameter(std::string s, double& out_value)
+// Format:
+// Default fraction and sigma
+// gw
+// Specified fraction and default sigma
+// gw20
+// Specified fraction and specified sigma
+// gw20:0.5
+bool ParseGradientWeightingParameter(std::string s, double& outFraction, double& outSigma)
 {
     if(s.length() < 2)
     {
@@ -506,7 +522,30 @@ bool ParseGradientWeightingParameter(std::string s, double& out_value)
         return true;
     }
 
-    out_value = atof(s.c_str() + 2) / 100.0;
+    // Test if a ':' exists
+    auto colonPos = s.find(':');
+    if (colonPos == std::string::npos)
+    {
+        // No ':' exists
+        outFraction = atof(s.c_str() + 2) / 100.0;
+    } else {
+        // A ':' exists
+
+        // Extract the fraction string into fractionStr, skip the colon, and put the rest of the string in sigmaStr
+        std::string fractionStr = s.substr(2, colonPos-2);
+        std::string sigmaStr = s.substr(colonPos+1);
+
+        if (colonPos > 2)
+        {
+            // If there is a fraction, read it
+            outFraction = atof(fractionStr.c_str()) / 100.0;
+        }
+      
+        if (sigmaStr.length() > 0)
+        {
+            outSigma = atof(sigmaStr.c_str());
+        }        
+    }
 
     return true;
 }
@@ -538,16 +577,16 @@ void mcalpha_linear_register_func(typename ImageType::Pointer fixedImage, typena
     distStructRefImage->SetSampleCount(param.alphaLevels);
     distStructRefImage->SetImage(fixedImage);
     distStructRefImage->SetMaxDistance(dmaxRefImage);
-    distStructRefImage->SetApproximationThreshold(20.0);
-    distStructRefImage->SetApproximationFraction(0.2);
+    distStructRefImage->SetApproximationThreshold(param.approximationThreshold);
+    distStructRefImage->SetApproximationFraction(param.approximationFraction);
     distStructRefImage->SetDistancePower(param.distancePower);
     distStructRefImage->SetInwardsMode(param.inwardsMode);
 
     distStructFloImage->SetSampleCount(param.alphaLevels);
     distStructFloImage->SetImage(movingImage);
     distStructFloImage->SetMaxDistance(dmaxFloImage);
-    distStructFloImage->SetApproximationThreshold(20.0);
-    distStructFloImage->SetApproximationFraction(0.2);
+    distStructFloImage->SetApproximationThreshold(param.approximationThreshold);
+    distStructFloImage->SetApproximationFraction(param.approximationFraction);
     distStructFloImage->SetDistancePower(param.distancePower);
     distStructFloImage->SetInwardsMode(param.inwardsMode);
 
@@ -564,11 +603,11 @@ void mcalpha_linear_register_func(typename ImageType::Pointer fixedImage, typena
     
     PointSamplerPointer sampler1; 
     PointSamplerPointer sampler2;
-    constexpr double SIGMA = 0.5; // THis should be tunable
+    double gradientWeightedSigma = 0.5;
     
     double gradientWeightedFraction = 0.5;
-    bool enableGraidentWeightedSampling = ParseGradientWeightingParameter(param.samplingMode, gradientWeightedFraction);
-    if (enableGraidentWeightedSampling)
+    bool enableGradientWeightedSampling = ParseGradientWeightingParameter(param.samplingMode, gradientWeightedFraction, gradientWeightedSigma);
+    if (enableGradientWeightedSampling)
     {
         if (gradientWeightedFraction < 0)
         {
@@ -579,22 +618,10 @@ void mcalpha_linear_register_func(typename ImageType::Pointer fixedImage, typena
             gradientWeightedFraction = 1.0;
         }
 
-        sampler1 = CreateHybridPointSampler(fixedImage, fixedMask, gradientWeightedFraction, false, SIGMA, param.seed);
-        sampler2 = CreateHybridPointSampler(movingImage, movingMask, gradientWeightedFraction, false, SIGMA, param.seed);        
+        sampler1 = CreateHybridPointSampler(fixedImage, fixedMask, gradientWeightedFraction, false, gradientWeightedSigma, param.seed);
+        sampler2 = CreateHybridPointSampler(movingImage, movingMask, gradientWeightedFraction, false, gradientWeightedSigma, param.seed);        
     }
     else
-    //if(param.samplingMode == "gw" || param.samplingMode == "gw50")
-    //{
-    //    sampler1 = CreateHybridPointSampler(fixedImage, fixedMask, 0.5, false, SIGMA, param.seed);
-    //    sampler2 = CreateHybridPointSampler(movingImage, movingMask, 0.5, false, SIGMA, param.seed);
-    //} else if(param.samplingMode == "gw25")
-    //{
-    //    sampler1 = CreateHybridPointSampler(fixedImage, fixedMask, 0.25, false, SIGMA, param.seed);
-    //    sampler2 = CreateHybridPointSampler(movingImage, movingMask, 0.25, false, SIGMA, param.seed);
-    //} else if(param.samplingMode == "gw75")
-    //{
-    //    sampler1 = CreateHybridPointSampler(fixedImage, fixedMask, 0.75, false, SIGMA, param.seed);
-    //    sampler2 = CreateHybridPointSampler(movingImage, movingMask, 0.75, false, SIGMA, param.seed);
     if(param.samplingMode == "quasi")
     {
         sampler1 = CreateQuasiRandomPointSampler(fixedImage, fixedMask, param.seed);
@@ -683,16 +710,16 @@ void mcalpha_register_func(typename ImageType::Pointer fixedImage, typename Imag
     distStructRefImage->SetSampleCount(param.alphaLevels);
     distStructRefImage->SetImage(fixedImage);
     distStructRefImage->SetMaxDistance(dmaxRefImage);
-    distStructRefImage->SetApproximationThreshold(20.0);
-    distStructRefImage->SetApproximationFraction(0.2);
+    distStructRefImage->SetApproximationThreshold(param.approximationThreshold);
+    distStructRefImage->SetApproximationFraction(param.approximationFraction);
     distStructRefImage->SetDistancePower(param.distancePower);
     distStructRefImage->SetInwardsMode(param.inwardsMode);
 
     distStructFloImage->SetSampleCount(param.alphaLevels);
     distStructFloImage->SetImage(movingImage);
     distStructFloImage->SetMaxDistance(dmaxFloImage);
-    distStructFloImage->SetApproximationThreshold(20.0);
-    distStructFloImage->SetApproximationFraction(0.2);
+    distStructFloImage->SetApproximationThreshold(param.approximationThreshold);
+    distStructFloImage->SetApproximationFraction(param.approximationFraction);
     distStructFloImage->SetDistancePower(param.distancePower);
     distStructFloImage->SetInwardsMode(param.inwardsMode);
 
@@ -709,11 +736,11 @@ void mcalpha_register_func(typename ImageType::Pointer fixedImage, typename Imag
     
     PointSamplerPointer sampler1; 
     PointSamplerPointer sampler2;
-    constexpr double SIGMA = 0.5;
+    double gradientWeightedSigma = 0.5;
     
     double gradientWeightedFraction = 0.5;
-    bool enableGraidentWeightedSampling = ParseGradientWeightingParameter(param.samplingMode, gradientWeightedFraction);
-    if (enableGraidentWeightedSampling)
+    bool enableGradientWeightedSampling = ParseGradientWeightingParameter(param.samplingMode, gradientWeightedFraction, gradientWeightedSigma);
+    if (enableGradientWeightedSampling)
     {
         if (gradientWeightedFraction < 0)
         {
@@ -724,22 +751,10 @@ void mcalpha_register_func(typename ImageType::Pointer fixedImage, typename Imag
             gradientWeightedFraction = 1.0;
         }
 
-        sampler1 = CreateHybridPointSampler(fixedImage, fixedMask, gradientWeightedFraction, false, SIGMA, param.seed);
-        sampler2 = CreateHybridPointSampler(movingImage, movingMask, gradientWeightedFraction, false, SIGMA, param.seed);        
+        sampler1 = CreateHybridPointSampler(fixedImage, fixedMask, gradientWeightedFraction, false, gradientWeightedSigma, param.seed);
+        sampler2 = CreateHybridPointSampler(movingImage, movingMask, gradientWeightedFraction, false, gradientWeightedSigma, param.seed);        
     }
     else
-    //if(param.samplingMode == "gw" || param.samplingMode == "gw50")
-    //{
-    //    sampler1 = CreateHybridPointSampler(fixedImage, fixedMask, 0.5, false, SIGMA, param.seed);
-    //    sampler2 = CreateHybridPointSampler(movingImage, movingMask, 0.5, false, SIGMA, param.seed);
-    //} else if(param.samplingMode == "gw25")
-    //{
-    //    sampler1 = CreateHybridPointSampler(fixedImage, fixedMask, 0.25, false, SIGMA, param.seed);
-    //    sampler2 = CreateHybridPointSampler(movingImage, movingMask, 0.25, false, SIGMA, param.seed);
-    //} else if(param.samplingMode == "gw75")
-    //{
-    //    sampler1 = CreateHybridPointSampler(fixedImage, fixedMask, 0.75, false, SIGMA, param.seed);
-    //    sampler2 = CreateHybridPointSampler(movingImage, movingMask, 0.75, false, SIGMA, param.seed);
     if(param.samplingMode == "quasi")
     {
         sampler1 = CreateQuasiRandomPointSampler(fixedImage, fixedMask, param.seed);
@@ -928,17 +943,14 @@ void register_deformable(
         {
             fixedImagePrime = IPT::NormalizeImage(fixedImagePrime, IPT::IntensityMinMax(fixedImagePrime, paramSet.normalization));
             movingImagePrime = IPT::NormalizeImage(movingImagePrime, IPT::IntensityMinMax(movingImagePrime, paramSet.normalization));
-            fixedImagePrime = IPT::HistogramEqualization(fixedImagePrime, nullptr, 255);
-            movingImagePrime = IPT::HistogramEqualization(movingImagePrime, nullptr, 255);
+            fixedImagePrime = IPT::HistogramEqualization(fixedImagePrime, nullptr, paramSet.histogramEqualization);
+            movingImagePrime = IPT::HistogramEqualization(movingImagePrime, nullptr, paramSet.histogramEqualization);
         }
 
-        std::cerr << "Starting affine registration " << i << std::endl;
         mcalpha_linear_register_func<CompositeTransformType>(fixedImagePrime, movingImagePrime, compositeTransformation, paramSet, fixedMaskPrime, movingMaskPrime, parameterScaling, paramSet.verbose);       
     }
 
     transformAffineOut = compositeTransformation;
-
-    std::cerr << "Completed affine registration" << std::endl;
 
     // Do deformable registration
     for(size_t i = 0; i < bsplineParam.paramSets.size(); ++i) {
@@ -972,8 +984,8 @@ void register_deformable(
         {
             fixedImagePrime = IPT::NormalizeImage(fixedImagePrime, IPT::IntensityMinMax(fixedImagePrime, paramSet.normalization));
             movingImagePrime = IPT::NormalizeImage(movingImagePrime, IPT::IntensityMinMax(movingImagePrime, paramSet.normalization));
-            fixedImagePrime = IPT::HistogramEqualization(fixedImagePrime, nullptr, 255);
-            movingImagePrime = IPT::HistogramEqualization(movingImagePrime, nullptr, 255);
+            fixedImagePrime = IPT::HistogramEqualization(fixedImagePrime, nullptr, paramSet.histogramEqualization);
+            movingImagePrime = IPT::HistogramEqualization(movingImagePrime, nullptr, paramSet.histogramEqualization);
         }
 
         if(i == 0) {
