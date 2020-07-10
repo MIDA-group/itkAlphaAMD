@@ -396,7 +396,7 @@ void UpsampleBSplineTransform(ImagePointer image, TransformPointer newTransform,
     newTransform->SetParameters(parameters);
 }
 
-typename PointSamplerBase<ImageType, itk::Image<bool, Dim>, ImageType>::Pointer CreateHybridPointSampler(ImagePointer im, ImagePointer maskImage, double w1 = 0.5, bool binaryMode = false, double sigma = 0.0, unsigned int seed = 1000U)
+typename PointSamplerBase<ImageType, itk::Image<bool, Dim>, ImageType>::Pointer CreateHybridPointSampler(ImagePointer im, ImagePointer maskImage, double gradientWeightedProb = 0.5, bool binaryMode = false, double sigma = 0.0, unsigned int seed = 1000U)
 {
     using PointSamplerType = PointSamplerBase<ImageType, itk::Image<bool, Dim>, ImageType>;
     using PointSamplerPointer = typename PointSamplerType::Pointer;
@@ -418,8 +418,8 @@ typename PointSamplerBase<ImageType, itk::Image<bool, Dim>, ImageType>::Pointer 
     typename HybridPointSampler<ImageType, itk::Image<bool, Dim>, ImageType>::Pointer sampler3 =
         HybridPointSampler<ImageType, itk::Image<bool, Dim>, ImageType>::New();
 
-    sampler3->AddSampler(sampler1, w1);
-    sampler3->AddSampler(sampler2.GetPointer(), 1.0-w1);
+    sampler3->AddSampler(sampler1, 1.0-gradientWeightedProb);
+    sampler3->AddSampler(sampler2.GetPointer(), gradientWeightedProb);
     sampler3->SetImage(im);
     sampler3->SetSeed(seed);
     sampler3->Initialize();
