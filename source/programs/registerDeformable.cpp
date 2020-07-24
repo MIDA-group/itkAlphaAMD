@@ -304,7 +304,7 @@ struct RegistrationAnimationCallback : public BSplineRegistrationCallback<TTrans
 
             // This can be optimized to not first produce a full resolution image and then subsample it...
 
-            ImagePointer frame = AnimApplyTransformToImage<ImageType, TransformType>(m_RefImage, m_FloImage, this->m_TransformForward, 1, 0);
+            ImagePointer frame = AnimApplyTransformToImage<ImageType, TransformType>(m_RefImage, m_FloImage, this->m_TransformForward, 0, 0);
             if (m_RenderMode == "difference")
             {
                 frame = IPT::DifferenceImage(m_RefImage, frame);
