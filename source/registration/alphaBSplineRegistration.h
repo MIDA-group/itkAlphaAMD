@@ -445,10 +445,10 @@ private:
 			unsigned int parInd = offFor + indicesFor[mu];//parameterIndicesFor[mu];
             double sw = weightsFor[mu];//splineWeightsFor[mu];
 
-			//dfor[parInd] -= FixedPointFromDouble(invLambdaValueWGradVal * sw + lambdaWeightedSymmetryLossGradVal * sw);
-			//wfor[parInd] += FixedPointFromDouble(invLambdaWeighted * sw + lambdaWeighted * sw);
-			dfor[parInd] -= FixedPointFromDouble(invLambdaValueWGradVal * sw);
-			wfor[parInd] += FixedPointFromDouble(invLambdaWeighted * sw);
+			dfor[parInd] -= FixedPointFromDouble(invLambdaValueWGradVal * sw + lambdaWeightedSymmetryLossGradVal * sw);
+			wfor[parInd] += FixedPointFromDouble(invLambdaWeighted * sw + lambdaWeighted * sw);
+			//dfor[parInd] -= FixedPointFromDouble(invLambdaValueWGradVal * sw);
+			//wfor[parInd] += FixedPointFromDouble(invLambdaWeighted * sw);
 		}
 
         if(isInside)
