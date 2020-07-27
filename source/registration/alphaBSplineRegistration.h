@@ -18,6 +18,42 @@
 // Point sampler methods
 #include "../samplers/pointSamplerBase.h"
 
+//#define ENABLE_SYMMETRY_APPROXIMATION
+
+// Computes the (numerical) spatial derivatives matrix of a transformation w.r.t. a given point and step size.
+// First index (row) represents the index of the input dimension being changed
+// Second index (column) represents the index of the output dimension changing accordingly
+template <typename TTransformType, unsigned int Dim>
+itk::Matrix<double, Dim, Dim> NumericalSpatialDerivatives(
+    TTransformType* transform,
+    itk::Point<double, Dim> p,
+    double stepSize = 1e-6
+    )
+{
+    using PointType = itk::Point<double, Dim>;
+    itk::Matrix<double, Dim, Dim> result;
+    double denomFactor = 1.0/(2.0 * stepSize);
+
+    for (unsigned int i = 0; i < Dim; ++i)
+    {
+        PointType pForward = p;
+        pForward[i] = pForward[i] + stepSize;
+        
+        PointType pBackward = p;
+        pBackward[i] = pBackward[i] - stepSize;
+
+        PointType tpForward = transform->TransformPoint(pForward);
+        PointType tpBackward = transform->TransformPoint(pBackward);
+
+        for (unsigned int j = 0; j < Dim; ++j)
+        {
+            result(i, j) = (tpForward[j]-tpBackward[j]) * denomFactor;
+        }
+    }
+
+    return result;
+}
+
 template <typename TImageType, typename TDistType, unsigned int TSplineOrder>
 struct AlphaBSplineRegistrationThreadState
 {
@@ -379,6 +415,11 @@ private:
 		return;
 	trev->TransformPoint(transformedPoint, returnedPoint, splineWeightsRev, parameterIndicesRev, isInside);
 
+#ifdef ENABLE_SYMMETRY_APPROXIMATION
+#else
+    itk::Matrix<double, Dim, Dim> trevSpatialDerivatives = NumericalSpatialDerivatives<TransformType, Dim>(trev, transformedPoint);
+#endif
+
     itk::Vector<double, ImageDimension> symLossVec;
     double symLossValue;
     
@@ -445,7 +486,24 @@ private:
 			unsigned int parInd = offFor + indicesFor[mu];//parameterIndicesFor[mu];
             double sw = weightsFor[mu];//splineWeightsFor[mu];
 
-			dfor[parInd] -= FixedPointFromDouble(invLambdaValueWGradVal * sw + lambdaWeightedSymmetryLossGradVal * sw);
+#ifdef ENABLE_SYMMETRY_APPROXIMATION
+            const double forwardSymmetryGradContribution = lambdaWeightedSymmetryLossGradVal * sw;
+			//dfor[parInd] -= FixedPointFromDouble(invLambdaValueWGradVal * sw + lambdaWeightedSymmetryLossGradVal * sw);
+			//wfor[parInd] += FixedPointFromDouble(invLambdaWeighted * sw + lambdaWeighted * sw);
+#else
+            double sltGradValAcc = 0.0;
+            for (unsigned int j = 0; j < Dim; ++j)
+            {
+                // Check order of trevSpatialDerivatives parameters
+                const double sltGradVal_j = trevSpatialDerivatives(dim, j) * symLossVec[j];
+                sltGradValAcc += sltGradVal_j;
+            }
+
+            sltGradValAcc *= lambdaWeighted;
+
+            const double forwardSymmetryGradContribution = lambdaWeighted * sltGradValAcc * sw;
+#endif
+			dfor[parInd] -= FixedPointFromDouble(invLambdaValueWGradVal * sw + forwardSymmetryGradContribution);
 			wfor[parInd] += FixedPointFromDouble(invLambdaWeighted * sw + lambdaWeighted * sw);
 			//dfor[parInd] -= FixedPointFromDouble(invLambdaValueWGradVal * sw);
 			//wfor[parInd] += FixedPointFromDouble(invLambdaWeighted * sw);
