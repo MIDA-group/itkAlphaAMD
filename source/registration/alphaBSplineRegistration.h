@@ -488,13 +488,16 @@ private:
 
 #ifdef ENABLE_SYMMETRY_APPROXIMATION
             const double forwardSymmetryGradContribution = lambdaWeightedSymmetryLossGradVal * sw;
+            const double forwardSymmetryWeightContribution = lambdaWeighted * sw;
 			//dfor[parInd] -= FixedPointFromDouble(invLambdaValueWGradVal * sw + lambdaWeightedSymmetryLossGradVal * sw);
 			//wfor[parInd] += FixedPointFromDouble(invLambdaWeighted * sw + lambdaWeighted * sw);
 #else
             double sltGradValAcc = 0.0;
+            double wacc = 0.0;
             for (unsigned int j = 0; j < Dim; ++j)
             {
                 // Check order of trevSpatialDerivatives parameters
+                wacc += trevSpatialDerivatives(dim, j);
                 const double sltGradVal_j = trevSpatialDerivatives(dim, j) * symLossVec[j];
                 sltGradValAcc += sltGradVal_j;
             }
@@ -502,9 +505,10 @@ private:
             sltGradValAcc *= lambdaWeighted;
 
             const double forwardSymmetryGradContribution = lambdaWeighted * sltGradValAcc * sw;
+            const double forwardSymmetryWeightContribution = wacc * lambdaWeighted * sw;
 #endif
 			dfor[parInd] -= FixedPointFromDouble(invLambdaValueWGradVal * sw + forwardSymmetryGradContribution);
-			wfor[parInd] += FixedPointFromDouble(invLambdaWeighted * sw + lambdaWeighted * sw);
+			wfor[parInd] += FixedPointFromDouble(invLambdaWeighted * sw + forwardSymmetryWeightContribution);
 			//dfor[parInd] -= FixedPointFromDouble(invLambdaValueWGradVal * sw);
 			//wfor[parInd] += FixedPointFromDouble(invLambdaWeighted * sw);
 		}
