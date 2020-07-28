@@ -501,9 +501,6 @@ private:
                 const double sltGradVal_j = trevSpatialDerivatives(dim, j) * symLossVec[j];
                 sltGradValAcc += sltGradVal_j;
             }
-
-            sltGradValAcc *= lambdaWeighted;
-
             const double forwardSymmetryGradContribution = lambdaWeighted * sltGradValAcc * sw;
             const double forwardSymmetryWeightContribution = wacc * lambdaWeighted * sw;
 #endif
