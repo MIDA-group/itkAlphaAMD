@@ -54,6 +54,37 @@ itk::Matrix<double, Dim, Dim> NumericalSpatialDerivatives(
     return result;
 }
 
+// Computes the (numerical) spatial derivatives matrix of a transformation w.r.t. a given point and step size.
+// First index (row) represents the index of the input dimension being changed
+// Second index (column) represents the index of the output dimension changing accordingly
+template <typename TTransformType, unsigned int Dim>
+itk::Matrix<double, Dim, Dim> NumericalSpatialDerivativesForward(
+    TTransformType* transform,
+    itk::Point<double, Dim> p,
+    itk::Point<double, Dim> tpMid,
+    double stepSize = 1e-6
+    )
+{
+    using PointType = itk::Point<double, Dim>;
+    itk::Matrix<double, Dim, Dim> result;
+    double denomFactor = 1.0/stepSize;
+
+    for (unsigned int i = 0; i < Dim; ++i)
+    {
+        PointType pForward = p;
+        pForward[i] = pForward[i] + stepSize;
+        
+        PointType tpForward = transform->TransformPoint(pForward);
+
+        for (unsigned int j = 0; j < Dim; ++j)
+        {
+            result(i, j) = (tpForward[j]-tpMid[j]) * denomFactor;
+        }
+    }
+
+    return result;
+}
+
 template <typename TImageType, typename TDistType, unsigned int TSplineOrder>
 struct AlphaBSplineRegistrationThreadState
 {
@@ -417,7 +448,8 @@ private:
 
 #ifdef ENABLE_SYMMETRY_APPROXIMATION
 #else
-    itk::Matrix<double, Dim, Dim> trevSpatialDerivatives = NumericalSpatialDerivatives<TransformType, Dim>(trev, transformedPoint);
+    //itk::Matrix<double, Dim, Dim> trevSpatialDerivatives = NumericalSpatialDerivatives<TransformType, Dim>(trev, transformedPoint);
+    itk::Matrix<double, Dim, Dim> trevSpatialDerivatives = NumericalSpatialDerivativesForward<TransformType, Dim>(trev, transformedPoint, returnedPoint);
 #endif
 
     itk::Vector<double, ImageDimension> symLossVec;
@@ -481,33 +513,30 @@ private:
         typename WeightsType::ValueType* weightsFor = &splineWeightsFor[0];
         typename ParameterIndexArrayType::ValueType* indicesFor = &parameterIndicesFor[0];
 
+#ifdef ENABLE_SYMMETRY_APPROXIMATION
+        const double forwardSymmetryGradContribution = lambdaWeightedSymmetryLossGradVal;
+        const double forwardSymmetryWeightContribution = lambdaWeighted;
+#else
+        double sltGradValAcc = 0.0;
+        double wacc = 0.0;
+        for (unsigned int j = 0; j < Dim; ++j)
+        {
+            // Check order of trevSpatialDerivatives parameters
+            wacc += trevSpatialDerivatives(dim, j);
+            const double sltGradVal_j = trevSpatialDerivatives(dim, j) * symLossVec[j];
+            sltGradValAcc += sltGradVal_j;
+        }
+        const double forwardSymmetryGradContribution = lambdaWeighted * sltGradValAcc;
+        const double forwardSymmetryWeightContribution = wacc * lambdaWeighted;
+#endif
+
 		for (unsigned int mu = 0; mu < supportSizeFor; ++mu)
 		{
-			unsigned int parInd = offFor + indicesFor[mu];//parameterIndicesFor[mu];
-            double sw = weightsFor[mu];//splineWeightsFor[mu];
+			unsigned int parInd = offFor + indicesFor[mu];
+            double sw = weightsFor[mu];
 
-#ifdef ENABLE_SYMMETRY_APPROXIMATION
-            const double forwardSymmetryGradContribution = lambdaWeightedSymmetryLossGradVal * sw;
-            const double forwardSymmetryWeightContribution = lambdaWeighted * sw;
-			//dfor[parInd] -= FixedPointFromDouble(invLambdaValueWGradVal * sw + lambdaWeightedSymmetryLossGradVal * sw);
-			//wfor[parInd] += FixedPointFromDouble(invLambdaWeighted * sw + lambdaWeighted * sw);
-#else
-            double sltGradValAcc = 0.0;
-            double wacc = 0.0;
-            for (unsigned int j = 0; j < Dim; ++j)
-            {
-                // Check order of trevSpatialDerivatives parameters
-                wacc += trevSpatialDerivatives(dim, j);
-                const double sltGradVal_j = trevSpatialDerivatives(dim, j) * symLossVec[j];
-                sltGradValAcc += sltGradVal_j;
-            }
-            const double forwardSymmetryGradContribution = lambdaWeighted * sltGradValAcc * sw;
-            const double forwardSymmetryWeightContribution = wacc * lambdaWeighted * sw;
-#endif
-			dfor[parInd] -= FixedPointFromDouble(invLambdaValueWGradVal * sw + forwardSymmetryGradContribution);
-			wfor[parInd] += FixedPointFromDouble(invLambdaWeighted * sw + forwardSymmetryWeightContribution);
-			//dfor[parInd] -= FixedPointFromDouble(invLambdaValueWGradVal * sw);
-			//wfor[parInd] += FixedPointFromDouble(invLambdaWeighted * sw);
+			dfor[parInd] -= FixedPointFromDouble((invLambdaValueWGradVal + forwardSymmetryGradContribution) * sw);
+			wfor[parInd] += FixedPointFromDouble((invLambdaWeighted + forwardSymmetryWeightContribution) * sw);
 		}
 
         if(isInside)
