@@ -75,14 +75,73 @@ itk::Matrix<double, Dim, Dim> NumericalSpatialDerivativesForward(
         pForward[i] = pForward[i] + stepSize;
         
         PointType tpForward = transform->TransformPoint(pForward);
-
-        for (unsigned int j = 0; j < Dim; ++j)
+        if (tpForward == pForward)
         {
-            result(i, j) = (tpForward[j]-tpMid[j]) * denomFactor;
+            for (unsigned int j = 0; j < Dim; ++j)
+            {
+                result(i, j) = 0.0;
+            }
+            result(i, i) = 1.0;
+        } else {
+            for (unsigned int j = 0; j < Dim; ++j)
+            {
+                result(i, j) = (tpForward[j]-tpMid[j]) * denomFactor;
+            }
         }
     }
 
     return result;
+}
+
+template <typename TTransformType, unsigned int Dim>
+bool ApplyBSplineTransformToPointWithSpatialNumericalDerivatives(
+    TTransformType* transform,
+    itk::Point<double, Dim> p,
+    itk::Point<double, Dim> &outputPoint,
+    itk::Matrix<double, Dim, Dim> &derivatives,
+    typename TTransformType::WeightsType &weights,
+    typename TTransformType::ParameterIndexArrayType &indices,
+    double stepSize = 1e-6
+    )
+{
+    using PointType = itk::Point<double, Dim>;
+    double denomFactor = 1.0/stepSize;
+
+    PointType points[Dim];
+    bool isInside[Dim];
+
+    for (unsigned int i = 0; i < Dim; ++i)
+    {
+        PointType pForward = p;
+        pForward[i] = pForward[i] + stepSize;
+        
+        transform->TransformPoint(pForward, points[i], weights, indices, isInside[i]);
+        PointType tpForward = transform->TransformPoint(pForward);
+    }
+    bool outputPointInside;
+    transform->TransformPoint(p, outputPoint, weights, indices, outputPointInside);
+    if (!outputPointInside)
+    {
+        derivatives.SetIdentity();
+    } else {
+        for (unsigned int i = 0; i < Dim; ++i)
+        {
+            if (isInside[i])
+            {
+                for (unsigned int j = 0; j < Dim; ++j)
+                {
+                    derivatives(i, j) = (points[i][j]-outputPoint[j]) * denomFactor;
+                }
+            } else {
+                for (unsigned int j = 0; j < Dim; ++j)
+                {
+                    derivatives(i, j) = 0.0;
+                }
+            }
+        }
+    }
+
+    return outputPointInside;
 }
 
 template <typename TImageType, typename TDistType, unsigned int TSplineOrder>
@@ -444,12 +503,20 @@ private:
 	tfor->TransformPoint(pointSample.m_Point, transformedPoint, splineWeightsFor, parameterIndicesFor, isInside1);
 	if (!isInside1)
 		return;
-	trev->TransformPoint(transformedPoint, returnedPoint, splineWeightsRev, parameterIndicesRev, isInside);
 
 #ifdef ENABLE_SYMMETRY_APPROXIMATION
+	trev->TransformPoint(transformedPoint, returnedPoint, splineWeightsRev, parameterIndicesRev, isInside);
 #else
-    //itk::Matrix<double, Dim, Dim> trevSpatialDerivatives = NumericalSpatialDerivatives<TransformType, Dim>(trev, transformedPoint);
-    itk::Matrix<double, Dim, Dim> trevSpatialDerivatives = NumericalSpatialDerivativesForward<TransformType, Dim>(trev, transformedPoint, returnedPoint);
+    itk::Matrix<double, Dim, Dim> trevSpatialDerivatives;// = NumericalSpatialDerivativesForward<TransformType, Dim>(trev, transformedPoint, returnedPoint);
+    isInside = ApplyBSplineTransformToPointWithSpatialNumericalDerivatives<TransformType, Dim>(
+        trev,
+        transformedPoint,
+        returnedPoint,
+        trevSpatialDerivatives,
+        splineWeightsRev,
+        parameterIndicesRev,
+        1e-6
+    );
 #endif
 
     itk::Vector<double, ImageDimension> symLossVec;
@@ -522,7 +589,7 @@ private:
         for (unsigned int j = 0; j < Dim; ++j)
         {
             // Check order of trevSpatialDerivatives parameters
-            wacc += trevSpatialDerivatives(dim, j);
+            wacc += fabs(trevSpatialDerivatives(dim, j));
             const double sltGradVal_j = trevSpatialDerivatives(dim, j) * symLossVec[j];
             sltGradValAcc += sltGradVal_j;
         }
