@@ -596,13 +596,15 @@ private:
         const double forwardSymmetryWeightContribution = wacc * lambdaWeighted;
 #endif
 
+        const double dforUnscaled = invLambdaValueWGradVal + forwardSymmetryGradContribution;
+        const double wforUnscaled = invLambdaWeighted + forwardSymmetryWeightContribution;
 		for (unsigned int mu = 0; mu < supportSizeFor; ++mu)
 		{
 			unsigned int parInd = offFor + indicesFor[mu];
             double sw = weightsFor[mu];
 
-			dfor[parInd] -= FixedPointFromDouble((invLambdaValueWGradVal + forwardSymmetryGradContribution) * sw);
-			wfor[parInd] += FixedPointFromDouble((invLambdaWeighted + forwardSymmetryWeightContribution) * sw);
+			dfor[parInd] -= FixedPointFromDouble(dforUnscaled * sw);
+			wfor[parInd] += FixedPointFromDouble(wforUnscaled * sw);
 		}
 
         if(isInside)
