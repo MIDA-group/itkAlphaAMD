@@ -116,7 +116,6 @@ bool ApplyBSplineTransformToPointWithSpatialNumericalDerivatives(
         pForward[i] = pForward[i] + stepSize;
         
         transform->TransformPoint(pForward, points[i], weights, indices, isInside[i]);
-        PointType tpForward = transform->TransformPoint(pForward);
     }
     bool outputPointInside;
     transform->TransformPoint(p, outputPoint, weights, indices, outputPointInside);
