@@ -55,6 +55,28 @@ struct ProgramConfig {
     std::string  animFloImagePath;
 };
 
+void printTitle()
+{
+    std::cout << "INSPIRE (Intensity and Spatial Information-Based Deformable Image Registration)" << std::endl;
+}
+void printHelp(const char* binPath)
+{
+    const char *spc = "  ";
+    std::cout << "Usage: " << binPath << " dim (parameters)" << std::endl;
+    std::cout << spc << "-ref : reference image path [REQUIRED]" << std::endl;
+    std::cout << spc << "-flo : floating image path [REQUIRED]" << std::endl;
+    std::cout << spc << "-out_path_forward : path of the output deformable transformation (ref to flo) [REQUIRED]" << std::endl;
+    std::cout << spc << "-out_path_reverse : path of the output deformable transformation (flo to ref) [REQUIRED]" << std::endl;
+    std::cout << spc << "-cfg : (or deform_cfg) path of the config file for the deformable registration  [REQUIRED]" << std::endl;
+    std::cout << spc << "-affine_cfg : path of the config file for the affine registration" << std::endl;
+    std::cout << spc << "-ref_mask : reference mask image path" << std::endl;
+    std::cout << spc << "-flo_mask : floating mask image path" << std::endl;
+    std::cout << spc << "-out_path_affine_forward : path of the output affine transformation (ref to flo)" << std::endl;
+    std::cout << spc << "-out_path_affine_reverse : path of the output affine transformation (flo to ref)" << std::endl;
+    std::cout << spc << "-workers : number of worker threads to use" << std::endl;
+    //TODO: Add animation system parameters here
+}
+
 /**
  * Command line arguments
  * binpath dim cfgPath refImagePath floImagePath outPathForward outPathReverse (-refmask refMaskPath) (-flomaskpath floMaskPath) (-workers 6)
@@ -72,7 +94,7 @@ bool readKeyValuePairForProgramConfig(int argc, char** argv, int startIndex, Pro
         cfg.floImagePath = value;
     } else if (key == "-affine_cfg") {
         cfg.affineConfigPath = value;
-    } else if (key == "-deform_cfg") {
+    } else if ((key == "-cfg") || (key == "-deform_cfg")) {
         cfg.configPath = value;
     } else if (key == "-ref_mask") {
         cfg.refMaskPath = value;
@@ -86,9 +108,9 @@ bool readKeyValuePairForProgramConfig(int argc, char** argv, int startIndex, Pro
         cfg.outPathAffineForward = value;
     } else if (key == "-out_path_affine_reverse") {
         cfg.outPathAffineReverse = value;
-    } else if (key == "-out_path_deform_forward") {
+    } else if ((key == "-out_path_forward") || (key == "-out_path_deform_forward")) {
         cfg.outPathForward = value;
-    } else if (key == "-out_path_deform_reverse") {
+    } else if ((key == "-out_path_reverse") || (key == "-out_path_deform_reverse")) {
         cfg.outPathReverse = value;
     } // animation related parameters start here 
     else if (key == "-anim_out_path")
@@ -645,8 +667,10 @@ class RegisterDeformableProgram
 };
 
 int main(int argc, char** argv) {
+    printTitle();
     if(argc < 2) {
-        std::cout << "No arguments..." << std::endl;
+        printHelp(argv[0]);
+        return -1;
     }
     int ndim = atoi(argv[1]);
     if(ndim == 2) {
