@@ -558,10 +558,10 @@ private:
         valueW = pointSample.m_Weight;
     }
 
-    const double invLambda = 1.0 - lambda;
+    const double invLambda = 1.0;// - lambda;
     const double lambdaWeighted = lambda * w;
-    const double invLambdaWeighted = (1.0-lambda)*w;
-    const double invLambdaValueWeighted = (1.0-lambda)*valueW;
+    const double invLambdaWeighted = invLambda*w;
+    const double invLambdaValueWeighted = invLambda*valueW;
     const double doubleValue = invLambdaValueWeighted * localValue + lambdaWeighted * symLossValue;
     const double doubleWeight = invLambdaValueWeighted + lambdaWeighted;
     value += FixedPointFromDouble(doubleValue);
@@ -593,7 +593,7 @@ private:
             sltGradValAcc += sltGradVal_j;
         }
         const double forwardSymmetryGradContribution = lambdaWeighted * sltGradValAcc;
-        const double forwardSymmetryWeightContribution = wacc * lambdaWeighted;
+        const double forwardSymmetryWeightContribution = lambdaWeighted * wacc;
 #endif
 
         const double dforUnscaled = invLambdaValueWGradVal + forwardSymmetryGradContribution;

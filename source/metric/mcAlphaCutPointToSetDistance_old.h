@@ -284,36 +284,14 @@ inline double LowerBoundDistance(IndexType pnt, IndexType rectOrigin, SizeType r
   for (unsigned int i = 0; i < ImageDimension; ++i)
   {
     long long pnt_i = (long long)pnt[i];
-    long long lowEdgePos_i = (long long)rectOrigin[i];
-    long long highEdgePos_i = (long long)(rectOrigin[i] + rectSz[i]);
+    long long lowEdgePos_i = (long long)rectOrigin[i] - 1;
+    long long highEdgePos_i = (long long)(rectOrigin[i] + rectSz[i] + 1);
 
     double d1_i = (double)(lowEdgePos_i - pnt_i);
     double d2_i = (double)(pnt_i - highEdgePos_i);
     double d_i = std::max(std::max(d1_i, d2_i), 0.0) * sp[i];
     d += d_i*d_i;
   } 
-  return d;
-}
-
-template <typename IndexType, typename SizeType, unsigned int ImageDimension, typename SpacingType>
-inline double LowerBoundDistanceApprox(IndexType pnt, IndexType rectOrigin, SizeType rectSz, SpacingType sp, double thresholdSq, double fractionSq)
-{
-  double d = 0;
-  for (unsigned int i = 0; i < ImageDimension; ++i)
-  {
-    long long pnt_i = (long long)pnt[i];
-    long long lowEdgePos_i = (long long)rectOrigin[i];
-    long long highEdgePos_i = lowEdgePos_i + ((long long)(rectSz[i]) - 1LL);
-
-    double d1_i = (double)(lowEdgePos_i - pnt_i);
-    double d2_i = (double)(pnt_i - highEdgePos_i);
-    double d_i = std::max(std::max(d1_i, d2_i), 0.0) * sp[i];
-    d += d_i*d_i;
-  }
-
-  // Approximation
-  d = std::max((d-thresholdSq) * fractionSq, 0.0) + std::min(thresholdSq, d);
-
   return d;
 }
 
@@ -906,15 +884,12 @@ protected:
       return;
     
     itk::FixedArray<itk::Point<double, ImageDimension>, CornersType::size> corners;
-    IndexType cornerIndices[CornersType::size];
 
     for (unsigned int i = 0; i < CornersType::size; ++i)
     {
       for (unsigned int j = 0; j < ImageDimension; ++j)
       {
-        auto cornerIndex = m_Corners.m_Points[i][j] + index[j];
-        cornerIndices[i][j] = cornerIndex;
-        corners[i][j] = static_cast<double>(cornerIndex) * spacing[j];
+        corners[i][j] = static_cast<double>(m_Corners.m_Points[i][j] + index[j]) * spacing[j];
       }
     }
 
@@ -978,51 +953,30 @@ protected:
       }
       else
       { // Continue traversing the tree
-        // Compute (approximate) lower bounds on distance from each nearest grid-point to the node bounding box
+        // Compute lower bound on distance for all pixels in the node
         IndexType innerNodeInd = curStackNode.m_Index;
         SizeType innerNodeSz = curStackNode.m_Size;
-        double lowerBoundDistances[CornersType::size];
-        for (unsigned int i = 0; i < CornersType::size; ++i)
-        {
-          double* distTable_i = distTable + (sampleCount * i);
-          double* coDistTable_i = distTable_i + inwardsCount;
+        double lowerBoundDistance = MCDSInternal::LowerBoundDistance<IndexType, SizeType, ImageDimension>(index, innerNodeInd, innerNodeSz, spacing);
 
-          lowerBoundDistances[i] = MCDSInternal::LowerBoundDistanceApprox<IndexType, SizeType, ImageDimension>(
-            cornerIndices[i], innerNodeInd, innerNodeSz, spacing, thresholdSq, fractionSq
-          );
+        // --- Approximation starts here ---
+        if(lowerBoundDistance > thresholdSq) {
+          lowerBoundDistance = thresholdSq + (lowerBoundDistance-thresholdSq) * fractionSq;
         }
+        // --- Approximation ends here ---
 
         // Eliminate inwards values based on distance bounds
         for (; inStartLocal < inEndLocal; ++inStartLocal)
         {
-          bool anyMayImprove = false;
-          for (unsigned int i = 0; i < CornersType::size; ++i)
-          {
-            double cur_best = distTable[inStartLocal + (sampleCount * i)];
-            if (lowerBoundDistances[i] < cur_best)
-            {
-              anyMayImprove = true;
-              break;
-            }
-          }
-          if (anyMayImprove)
+          double cur_j = distTable[inStartLocal];
+          if (lowerBoundDistance <= cur_j)
             break;
         }
 
         // Eliminate complement values based on distance bounds
         for (; coStartLocal < coEndLocal; ++coStartLocal)
         {
-          bool anyMayImprove = false;
-          for (unsigned int i = 0; i < CornersType::size; ++i)
-          {
-            double cur_best = distTable[coStartLocal+inwardsCount + (sampleCount * i)];
-            if (lowerBoundDistances[i] < cur_best)
-            {
-              anyMayImprove = true;
-              break;
-            }
-          }
-          if (anyMayImprove)
+          double cur_j = distTable[coStartLocal+inwardsCount];
+          if (lowerBoundDistance <= cur_j)
             break;
         }
 
