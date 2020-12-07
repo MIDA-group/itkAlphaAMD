@@ -318,7 +318,7 @@ inline double LowerBoundDistanceApprox(IndexType pnt, IndexType rectOrigin, Size
     // Convert to Euclidean distance
     double d_e = sqrt(d);
     // Apply relaxation of the bound
-    d_e = fraction*(d-threshold) + threshold;
+    d_e = fraction*(d_e-threshold) + threshold;
     // Convert back to squared Euclidean distance
     d = d_e*d_e;
   }
