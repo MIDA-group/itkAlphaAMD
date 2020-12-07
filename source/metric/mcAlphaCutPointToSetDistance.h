@@ -296,7 +296,7 @@ inline double LowerBoundDistance(IndexType pnt, IndexType rectOrigin, SizeType r
 }
 
 template <typename IndexType, typename SizeType, unsigned int ImageDimension, typename SpacingType>
-inline double LowerBoundDistanceApprox(IndexType pnt, IndexType rectOrigin, SizeType rectSz, SpacingType sp, double thresholdSq, double fractionSq)
+inline double LowerBoundDistanceApprox(IndexType pnt, IndexType rectOrigin, SizeType rectSz, SpacingType sp, double threshold, double fraction)
 {
   double d = 0;
   for (unsigned int i = 0; i < ImageDimension; ++i)
@@ -311,8 +311,17 @@ inline double LowerBoundDistanceApprox(IndexType pnt, IndexType rectOrigin, Size
     d += d_i*d_i;
   }
 
-  // Approximation
-  d = std::max((d-thresholdSq) * fractionSq, 0.0) + std::min(thresholdSq, d);
+  // Old Incorrect Approximation
+  //d = std::max((d-thresholdSq) * fractionSq, 0.0) + std::min(thresholdSq, d);
+  // New Correct Approximation
+  if (d > threshold * threshold) {
+    // Convert to Euclidean distance
+    double d_e = sqrt(d);
+    // Apply relaxation of the bound
+    d_e = fraction*(d-threshold) + threshold;
+    // Convert back to squared Euclidean distance
+    d = d_e*d_e;
+  }
 
   return d;
 }
@@ -883,9 +892,9 @@ protected:
     unsigned int sampleCount = m_SampleCount;
 
     double threshold = m_ApproximationDistanceThreshold;
-    double thresholdSq = threshold*threshold;
+    //double thresholdSq = threshold*threshold;
     double fraction = 1.0 + m_ApproximationDistanceFraction;
-    double fractionSq = fraction*fraction;
+    //double fractionSq = fraction*fraction;
 
     // Stack
     StackNode stackNodes[33];
@@ -988,7 +997,7 @@ protected:
           double* coDistTable_i = distTable_i + inwardsCount;
 
           lowerBoundDistances[i] = MCDSInternal::LowerBoundDistanceApprox<IndexType, SizeType, ImageDimension>(
-            cornerIndices[i], innerNodeInd, innerNodeSz, spacing, thresholdSq, fractionSq
+            cornerIndices[i], innerNodeInd, innerNodeSz, spacing, threshold, fraction
           );
         }
 
