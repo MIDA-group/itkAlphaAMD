@@ -18,8 +18,6 @@
 // Point sampler methods
 #include "../samplers/pointSamplerBase.h"
 
-//#define ENABLE_SYMMETRY_APPROXIMATION
-
 // Computes the (numerical) spatial derivatives matrix of a transformation w.r.t. a given point and step size.
 // First index (row) represents the index of the input dimension being changed
 // Second index (column) represents the index of the output dimension changing accordingly
@@ -579,22 +577,24 @@ private:
         typename WeightsType::ValueType* weightsFor = &splineWeightsFor[0];
         typename ParameterIndexArrayType::ValueType* indicesFor = &parameterIndicesFor[0];
 
-#ifdef ENABLE_SYMMETRY_APPROXIMATION
-        const double forwardSymmetryGradContribution = lambdaWeightedSymmetryLossGradVal;
-        const double forwardSymmetryWeightContribution = lambdaWeighted;
-#else
         double sltGradValAcc = 0.0;
         double wacc = 0.0;
         for (unsigned int j = 0; j < Dim; ++j)
         {
             // Check order of trevSpatialDerivatives parameters
-            wacc += fabs(trevSpatialDerivatives(dim, j));
-            const double sltGradVal_j = trevSpatialDerivatives(dim, j) * symLossVec[j];
+            const double tsd_j = trevSpatialDerivatives(dim, j);
+            // For 1-norm
+            //wacc += fabs(tsd_j);
+            // For 2-norm
+            wacc += tsd_j*tsd_j;
+            const double sltGradVal_j = tsd_j * symLossVec[j];
             sltGradValAcc += sltGradVal_j;
         }
+        // For 2-norm
+        wacc = sqrt(wacc);
+
         const double forwardSymmetryGradContribution = lambdaWeighted * sltGradValAcc;
         const double forwardSymmetryWeightContribution = lambdaWeighted * wacc;
-#endif
 
         const double dforUnscaled = invLambdaValueWGradVal + forwardSymmetryGradContribution;
         const double wforUnscaled = invLambdaWeighted + forwardSymmetryWeightContribution;
