@@ -1,5 +1,6 @@
 
 itkAlphaAMD is a registration framework (and distance measure) building on Insight Segmentation and Registration Toolkit.
+If you use this, please cite: https://doi.org/10.1109/TIP.2019.2899947
 
 Author: Johan Öfverstedt
 
